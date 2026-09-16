@@ -12,3 +12,4 @@ def create_app(config_name: str = "local"):
 
 
 app = create_app()
+
