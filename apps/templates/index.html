@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESCOPE | 文章添削</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;600;700;800&family=Noto+Serif+JP:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='8') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="ESCOPE ホーム"><span class="brand-mark">E</span><span>ESCOPE</span></a>
+      <span class="topbar-note">TEXT REVIEW STUDIO</span>
+    </header>
+    <section class="intro">
+      <div class="eyebrow">TEXT REVIEW / 01</div>
+      <h1>文章を、<br><em>伝わる形</em>へ。</h1>
+      <p>指定した文字数に収まっているか確認し、誤字・脱字や表現を添削します。</p>
+    </section>
+    <section class="workspace" aria-label="文章添削">
+      <div class="editor-panel panel">
+        <div class="panel-head"><div><span class="panel-index">01</span><h2>文章を入力</h2></div><span class="required">必須</span></div>
+        <label for="question-type">質問の種類</label>
+        <select id="question-type" class="question-select">
+          <option value="">質問を選択してください（任意）</option>
+        </select>
+        <label for="target-char-count">指定文字数</label>
+        <input id="target-char-count" class="char-limit-input" type="number" min="1" max="10000" value="400" required>
+        <div class="input-label-row"><label for="essay">添削する文章</label><span>改行を除いてカウント</span></div>
+        <textarea id="essay" maxlength="10000" placeholder="ここに添削する文章を入力してください。"></textarea>
+        <div class="editor-meta"><span id="char-count">0 / 400</span><button id="clear-button" class="text-button" type="button">クリア</button></div>
+        <button id="review-button" class="primary-button" type="button"><span>文章を添削する</span><span class="button-arrow">↗</span></button>
+      </div>
+      <div class="result-panel panel" id="result-panel">
+        <div class="panel-head"><div><span class="panel-index">02</span><h2>添削結果</h2></div><span class="status" id="status">WAITING</span></div>
+        <div id="report" class="report" hidden>
+          <div class="result-count"><span class="metric-label">CHARACTER COUNT</span><strong id="report-count">0</strong><span> / <b id="report-limit">0</b>文字</span></div>
+          <div class="summary" id="summary"></div>
+          <label class="corrected-label" for="corrected-text">添削後の文章</label>
+          <textarea id="corrected-text" class="corrected-text" readonly></textarea>
+          <div class="suggestion"><span class="metric-label">REVIEW POINTS</span><div class="findings" id="findings"></div></div>
+        </div>
+      </div>
+    </section>
+    <footer><span>ESCOPE</span><span>WRITE WITH INTENT.</span></footer>
+  </main>
+  <script src="{{ url_for('static', filename='app.js', v='5') }}"></script>
+</body>
+</html>
