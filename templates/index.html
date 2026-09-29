@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Career Loom | AI面接練習</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#top" aria-label="Career Loom ホーム">
+        <span class="brand-mark">◎</span>
+        <span>career<span>loom</span></span>
+      </a>
+      <div class="profile-chip">
+        <div class="avatar">山</div>
+        <div><strong>山田 花子</strong><small>就活生</small></div>
+        <button class="icon-button" aria-label="通知">♧</button>
+      </div>
+      <nav class="main-nav" aria-label="メインメニュー">
+        <a href="#top"><span>⌂</span>ホーム</a>
+        <a class="active" href="#practice"><span>◉</span>AI面接練習</a>
+        <a href="#history"><span>◷</span>練習履歴</a>
+        <a href="#companies"><span>♡</span>お気に入り企業</a>
+      </nav>
+      <div class="sidebar-note"><span>✦</span><strong>今日のひとこと</strong><p>準備した分だけ、言葉は自信になる。</p></div>
+      <a class="settings" href="#settings"><span>⚙</span>設定</a>
+    </aside>
+
+    <main id="top" class="main-content">
+      <header class="topbar"><div class="breadcrumb">メニュー <span>/</span> AI面接練習</div><button class="help-button">？ ヘルプ</button></header>
+
+      <section class="intro" id="practice">
+        <div><p class="eyebrow">AI INTERVIEW STUDIO</p><h1>面接の練習を、<em>自分の味方に。</em></h1><p class="intro-copy">お気に入りの企業を選んで、あなたのペースで面接に向き合いましょう。</p></div>
+        <div class="progress-card"><div class="progress-top"><span>今回のステップ</span><strong id="step-label">01 / 04</strong></div><div class="progress-bar"><i id="progress-fill"></i></div><p id="step-copy">企業を選択してください</p></div>
+      </section>
+
+      <section class="workspace" aria-label="面接練習ワークスペース">
+        <div class="flow-panel">
+          <div class="section-heading"><div><span class="number">01</span><div><h2>企業を選ぶ</h2><p>お気に入りに登録した企業から選択</p></div></div><span class="required">必須</span></div>
+          <div class="company-grid" id="companies">
+            <button class="company-option selected" data-company="三日月デザイン"><span class="company-logo crescent">☾</span><span><strong>三日月デザイン</strong><small>プロダクトデザイン</small></span><span class="check">✓</span></button>
+            <button class="company-option" data-company="NOVA TECH"><span class="company-logo nova">N</span><span><strong>NOVA TECH</strong><small>IT・ソフトウェア</small></span><span class="check">✓</span></button>
+            <button class="company-option" data-company="HARBOR BANK"><span class="company-logo harbor">⌁</span><span><strong>HARBOR BANK</strong><small>金融・コンサル</small></span><span class="check">✓</span></button>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-heading"><div><span class="number">02</span><div><h2>面接形式を選ぶ</h2><p>今日の練習内容を決めましょう</p></div></div></div>
+          <div class="mode-grid"><button class="mode-option selected" data-mode="全体面接"><span class="mode-icon">▣</span><span><strong>全体面接</strong><small>本番の流れを通して練習</small></span><span class="radio"></span></button><button class="mode-option" data-mode="質問別面接"><span class="mode-icon">≡</span><span><strong>質問別面接</strong><small>苦手な質問を集中練習</small></span><span class="radio"></span></button></div>
+
+          <div class="divider"></div>
+          <div class="section-heading"><div><span class="number">03</span><div><h2>準備を確認</h2><p>カメラとマイクの状態をチェック</p></div></div></div>
+          <div class="device-status"><div class="status-item"><span class="status-dot" id="camera-dot"></span><span><strong>カメラ</strong><small id="camera-status">未接続</small></span></div><div class="status-item"><span class="status-dot" id="mic-dot"></span><span><strong>マイク</strong><small id="mic-status">未接続</small></span></div><button class="outline-button" id="device-button">デバイスを確認</button></div>
+          <button class="start-button" id="start-button" disabled><span>●</span> 面接をスタート</button>
+          <p class="privacy-note">録画データはこのブラウザ内に保存されます。いつでも削除できます。</p>
+        </div>
+
+        <div class="side-column">
+          <div class="preview-card"><div class="preview-head"><span>プレビュー</span><span class="live-pill" id="live-pill">● OFFLINE</span></div><div class="video-wrap"><video id="preview" autoplay muted playsinline></video><div class="video-placeholder" id="video-placeholder"><span class="camera-glyph">◉</span><strong>カメラを起動して<br>映り方を確認</strong><small>デバイスを確認から開始</small></div><div class="recording-indicator" id="recording-indicator">● REC <span id="record-time">00:00</span></div></div><p class="preview-caption">面接中はあなたの表情や姿勢も記録されます。</p></div>
+          <div class="tips-panel"><div class="tips-title"><span>✦</span><strong>面接前のチェック</strong></div><ul><li>顔が画面の中央に映っていますか？</li><li>静かで明るい場所ですか？</li><li>話すときはカメラを見ましょう。</li></ul></div>
+          <div class="history-mini" id="history"><div class="history-title"><strong>最近の練習</strong><a href="#history">すべて見る →</a></div><div id="history-list"><p class="empty-history">まだ練習履歴はありません</p></div></div>
+        </div>
+      </section>
+      <section class="interview-room" id="interview-room" hidden><div class="room-heading"><div><p class="eyebrow">INTERVIEW IN PROGRESS</p><h2 id="room-title">三日月デザインとの面接</h2></div><span class="room-timer" id="room-timer">00:00</span></div><div class="question-card"><div class="question-meta"><span>QUESTION <b id="question-number">01</b></span><span id="question-mode">全体面接</span></div><p id="question-text">あなたが学生時代に力を入れたことを教えてください。</p><button class="speak-button" id="speak-button" type="button">◖ 質問をもう一度読む</button></div><div class="transcript-box"><div class="transcript-header"><strong>リアルタイム文字起こし</strong><span id="listening-state">待機中</span></div><p id="transcript">面接を開始すると、ここに話した内容が表示されます。</p></div><div class="room-actions"><button class="next-question-button" id="next-question-button" type="button">次の質問 →</button><button class="stop-button" id="stop-button">■ 面接を終了して保存</button></div></section>
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
