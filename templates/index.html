@@ -65,9 +65,33 @@
           <div class="history-mini" id="history"><div class="history-title"><strong>最近の練習</strong><a href="#history">すべて見る →</a></div><div id="history-list"><p class="empty-history">まだ練習履歴はありません</p></div></div>
         </div>
       </section>
-      <section class="interview-room" id="interview-room" hidden><div class="room-heading"><div><p class="eyebrow">INTERVIEW IN PROGRESS</p><h2 id="room-title">三日月デザインとの面接</h2></div><span class="room-timer" id="room-timer">00:00</span></div><div class="question-card"><div class="question-meta"><span>QUESTION <b id="question-number">01</b></span><span id="question-mode">全体面接</span></div><p id="question-text">あなたが学生時代に力を入れたことを教えてください。</p><button class="speak-button" id="speak-button" type="button">◖ 質問をもう一度読む</button></div><div class="transcript-box"><div class="transcript-header"><strong>リアルタイム文字起こし</strong><span id="listening-state">待機中</span></div><p id="transcript">面接を開始すると、ここに話した内容が表示されます。</p></div><div class="room-actions"><button class="next-question-button" id="next-question-button" type="button">次の質問 →</button><button class="stop-button" id="stop-button">■ 面接を終了して保存</button></div></section>
+      <section class="interview-room" id="interview-room" hidden><div class="room-heading"><div><p class="eyebrow">INTERVIEW IN PROGRESS</p><h2 id="room-title">三日月デザインとの面接</h2></div><span class="room-timer" id="room-timer">00:00</span></div><div class="interview-camera"><video id="interview-preview" autoplay muted playsinline></video><span>あなたの顔</span></div><div class="question-card"><div class="question-meta"><span>QUESTION <b id="question-number">01</b></span><span id="question-mode">全体面接</span></div><p id="question-text">あなたが学生時代に力を入れたことを教えてください。</p><button class="speak-button" id="speak-button" type="button">◖ 質問をもう一度読む</button></div><div class="transcript-box"><div class="transcript-header"><strong>リアルタイム文字起こし</strong><span id="listening-state">待機中</span><span id="transcript-count">0文字</span></div><textarea id="transcript" rows="10" placeholder="話した内容がここに表示されます。長めに話しても入力できます。認識されない場合は直接入力できます。"></textarea><button class="recognition-button" id="recognition-button" type="button">マイクで聞き取りを再開</button></div><div class="score-panel"><div><span>表情</span><strong id="expression-score">--</strong><small id="expression-status">解析準備中</small></div><div><span>回答内容</span><strong id="answer-score">--</strong><small>具体性・構成</small></div></div>
+      <div class="summary-panel" id="summary-panel" hidden>
+        <div class="summary-header"><div><strong>今回の総評</strong><small id="summary-score-label">分析中</small></div><span id="summary-score">--</span></div>
+        <div class="summary-score-track" aria-label="総合スコア"><i id="summary-score-fill"></i></div>
+        <p id="summary-verdict">回答を分析しています...</p>
+      </div>
+      <div class="advice-panel" id="advice-panel" hidden>
+        <div class="advice-header"><strong>面接アドバイス</strong><span id="advice-mode">AI分析</span></div>
+        <p id="advice-summary">回答と表情を分析しています...</p>
+        <div class="advice-group">
+          <h4>良い点</h4>
+          <ul id="advice-strengths"></ul>
+        </div>
+        <div class="advice-group">
+          <h4>改善ポイント</h4>
+          <ul id="advice-improvements"></ul>
+        </div>
+        <div class="advice-group">
+          <h4>次の一手</h4>
+          <ul id="advice-tips"></ul>
+        </div>
+      </div>
+      <div class="consult-panel" id="consult-panel" hidden><div class="consult-heading"><strong>面接コーチからの提案</strong><span>COACH NOTE</span></div><p id="consult-message"></p></div>
+      <div class="room-actions"><button class="consult-button" id="consult-button" type="button">面接コーチに相談</button><button class="next-question-button" id="next-question-button" type="button">次の質問 →</button><button class="stop-button" id="stop-button">■ 面接を終了して保存</button></div></section>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js', v='13') }}"></script>
 </body>
 </html>

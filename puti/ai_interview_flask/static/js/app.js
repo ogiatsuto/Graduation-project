@@ -1,19 +1,56 @@
+const adviceHistoryKey = 'puti-interview-advice-history';
 let companies = [];
 let state = {
   company: null, mode: 'all', selectedQuestions: [],
   stream: null, mediaRecorder: null, chunks: [],
   qIndex: 0, followupCount: 0, dialogueHistory: [], recognition: null,
+  interviewActive: false, interviewController: null,
   deviceMonitor: null, // カメラ/マイクの生存状態を1秒ごとに監視するタイマーID
+  adviceHistory: loadAdviceHistory(),
 };
 const MAX_FOLLOWUPS = 2;
-const SILENCE_MS = 1800; // pause length that counts as "done speaking"
 
 function showScreen(name) {
   document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
   document.getElementById('screen-' + name).classList.remove('hidden');
-  document.getElementById('crumb').textContent = 'HOME > ' + ({ home: '面接練習', mode: '練習方法の選択', camera: 'カメラ確認', history: '練習履歴', playback: 'ログ確認' }[name] || '');
+  document.getElementById('crumb').textContent = 'HOME > ' + ({ home: '面接練習', mode: '質問選択', camera: 'カメラ確認', history: '練習履歴', advice: 'アドバイス履歴', playback: 'ログ確認' }[name] || '');
   if (name === 'home') renderHome();
   if (name === 'history') loadHistory();
+  if (name === 'advice') renderAdviceHistory();
+}
+
+function loadAdviceHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(adviceHistoryKey) || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveAdviceHistory() {
+  localStorage.setItem(adviceHistoryKey, JSON.stringify(state.adviceHistory.slice(0, 100)));
+}
+
+function escapeAdviceText(value) {
+  return String(value || '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
+}
+
+function adviceItemText(value) {
+  if (value && typeof value === 'object') {
+    value = value.value || value.text || value.content || '';
+  }
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      return adviceItemText(parsed);
+    } catch (e) {
+      return text.replace(/[{}\[\]"]/g, '').replace(/\b(key|value|strengths|improvements|tips)\s*:/g, '').trim();
+    }
+  }
+  return text.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').trim();
 }
 
 async function loadCompanies() {
@@ -37,19 +74,33 @@ function renderHome() {
 
 function selectCompany(id) {
   state.company = companies.find(c => c.id === id);
-  state.mode = 'all';
-  state.selectedQuestions = [...state.company.questions];
+  state.selectedQuestions = getDefaultQuestionIndexes().map(index => state.company.questions[index]);
   document.getElementById('modeCompanyName').textContent = state.company.name;
-  document.querySelector('input[name=mode][value=all]').checked = true;
-  document.getElementById('questionPickBox').classList.add('hidden');
   renderQuestionPicker();
   showScreen('mode');
 }
 
+function getDefaultQuestionIndexes() {
+  return state.company.questions
+    .map((question, index) => ({ question, index }))
+    .sort((a, b) => {
+      const aIsIntroduction = /自己紹介|自己PR/.test(a.question);
+      const bIsIntroduction = /自己紹介|自己PR/.test(b.question);
+      return Number(bIsIntroduction) - Number(aIsIntroduction);
+    })
+    .map(item => item.index);
+}
+
 function renderQuestionPicker() {
   const box = document.getElementById('qList');
+  const randomCheckbox = document.getElementById('randomQuestion');
+  const randomCount = document.getElementById('randomCount');
+  randomCheckbox.checked = false;
+  randomCount.disabled = true;
+  randomCount.innerHTML = state.company.questions.map((question, index) => `<option value="${index + 1}">${index + 1}</option>`).join('');
   box.innerHTML = '';
-  state.company.questions.forEach((q, i) => {
+  getDefaultQuestionIndexes().slice(1).forEach(i => {
+    const q = state.company.questions[i];
     const row = document.createElement('label');
     row.className = 'qitem';
     row.innerHTML = `<input type="checkbox" value="${i}" checked onchange="onQCheck()"> ${q}`;
@@ -57,15 +108,48 @@ function renderQuestionPicker() {
   });
 }
 function onQCheck() {
-  const checked = [...document.querySelectorAll('#qList input:checked')].map(i => +i.value);
-  state.selectedQuestions = checked.map(i => state.company.questions[i]);
+  document.getElementById('randomQuestion').checked = false;
+  document.getElementById('randomCount').disabled = true;
+  const defaultIndexes = getDefaultQuestionIndexes();
+  const firstQuestionIndex = defaultIndexes[0];
+  const inputs = [...document.querySelectorAll('#qList input[type="checkbox"]')];
+  const checked = new Set(inputs.filter(input => input.checked).map(input => +input.value));
+  state.selectedQuestions = [firstQuestionIndex, ...defaultIndexes.slice(1)
+    .filter(index => checked.has(index))
+  ].map(index => state.company.questions[index]);
 }
-function onModeChange() {
-  state.mode = document.querySelector('input[name=mode]:checked').value;
-  document.getElementById('questionPickBox').classList.toggle('hidden', state.mode !== 'pick');
-  state.selectedQuestions = state.mode === 'all'
-    ? [...state.company.questions]
-    : [...document.querySelectorAll('#qList input:checked')].map(i => state.company.questions[+i.value]);
+function selectRandomQuestion() {
+  const randomCheckbox = document.getElementById('randomQuestion');
+  const randomCount = document.getElementById('randomCount');
+  if (!randomCheckbox.checked) {
+    randomCount.disabled = true;
+    onQCheck();
+    return;
+  }
+  randomCount.disabled = false;
+  const count = Math.min(Number(randomCount.value), state.company.questions.length);
+  const defaultIndexes = getDefaultQuestionIndexes();
+  const firstQuestionIndex = defaultIndexes[0];
+  const randomIndexes = defaultIndexes.slice(1)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, count - 1);
+  document.querySelectorAll('#qList input[type="checkbox"]').forEach(input => {
+    input.checked = false;
+  });
+  state.selectedQuestions = [firstQuestionIndex, ...randomIndexes]
+    .map(index => state.company.questions[index]);
+}
+function selectAllQuestions() {
+  document.getElementById('randomQuestion').checked = false;
+  document.getElementById('randomCount').disabled = true;
+  document.querySelectorAll('#qList input[type="checkbox"]').forEach(input => { input.checked = true; });
+  onQCheck();
+}
+function clearAllQuestions() {
+  document.getElementById('randomQuestion').checked = false;
+  document.getElementById('randomCount').disabled = true;
+  document.querySelectorAll('#qList input[type="checkbox"]').forEach(input => { input.checked = false; });
+  onQCheck();
 }
 
 // ---------- camera / mic check ----------
@@ -94,7 +178,7 @@ function stopDeviceMonitor() {
 }
 
 async function goToCameraCheck() {
-  if (state.mode === 'pick' && state.selectedQuestions.length === 0) { alert('質問を1つ以上選択してください'); return; }
+  if (state.selectedQuestions.length === 0) { alert('質問を1つ以上選択してください'); return; }
   showScreen('camera');
   stopDeviceMonitor();
   document.getElementById('camDot').className = 'dot';
@@ -106,6 +190,18 @@ async function goToCameraCheck() {
     document.getElementById('preview').srcObject = stream;
     updateDeviceStatus();
     state.deviceMonitor = setInterval(updateDeviceStatus, 1000);
+  function selectRandomQuestion() {
+    const randomCheckbox = document.getElementById('randomQuestion');
+    if (!randomCheckbox.checked) {
+      onQCheck();
+      return;
+    }
+    const randomIndex = Math.floor(Math.random() * state.company.questions.length);
+    document.querySelectorAll('#qList input[type="checkbox"]').forEach((input, index) => {
+      input.checked = index === randomIndex;
+    });
+    state.selectedQuestions = [state.company.questions[randomIndex]];
+  }
   } catch (e) {
     document.getElementById('camDot').className = 'dot bad';
     document.getElementById('micDot').className = 'dot bad';
@@ -128,19 +224,70 @@ function speechRecognitionSupported() {
   return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
 
+async function requestAdvice(answer, question) {
+  const controller = new AbortController();
+  state.interviewController = controller;
+  try {
+    const response = await fetch('/api/interview-advice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ answer, question }),
+    });
+    if (!response.ok) throw new Error('advice request failed');
+    return await response.json();
+  } catch (e) {
+    return { summary: '回答を確認しました。具体的な行動と結果をセットで伝えると、さらに説得力が増します。', strengths: ['自分の言葉で経験を説明しようとしています。'], improvements: ['「自分が何をしたか」を一つ具体的に説明しましょう。'], tips: ['結論・行動・結果・学びの順に整理して話しましょう。'] };
+  } finally {
+    if (state.interviewController === controller) state.interviewController = null;
+  }
+}
+
+function renderAdviceHistory() {
+  const list = document.getElementById('adviceHistoryList');
+  const empty = document.getElementById('adviceHistoryEmpty');
+  if (!list || !empty) return;
+  empty.classList.toggle('hidden', state.adviceHistory.length > 0);
+  list.innerHTML = state.adviceHistory.slice().reverse().map((entry, index) => {
+    const advice = entry.advice || {};
+    const items = (values, fallback) => (values && values.length ? values : [fallback]).map(value => `<li>${escapeAdviceText(adviceItemText(value))}</li>`).join('');
+    const summary = adviceItemText(advice.summary || '回答を確認しました。');
+    return `<article class="advice-history-card">
+      <div class="advice-history-meta"><strong>${escapeAdviceText(entry.company)}</strong><span>${escapeAdviceText(entry.created_at)} ・ ${entry.followup_count ? `深掘り ${entry.followup_count}回目` : 'メイン質問'}</span></div>
+      <h3>${escapeAdviceText(entry.question)}</h3>
+      <p class="advice-answer">${escapeAdviceText(entry.answer)}</p>
+      <p class="advice-history-summary">${escapeAdviceText(summary)}</p>
+      <div class="advice-columns"><div><h4>良い点</h4><ul>${items(advice.strengths, '自分の言葉で回答できています。')}</ul></div><div><h4>改善ポイント</h4><ul>${items(advice.improvements, '具体例を一つ加えてみましょう。')}</ul></div><div><h4>次の一手</h4><ul>${items(advice.tips, '結論から話してみましょう。')}</ul></div></div>
+    </article>`;
+  }).join('');
+}
+
 // ---------- interview flow ----------
 function startInterview() {
   stopDeviceMonitor(); // カメラ確認画面用の監視はここで停止する
+  state.interviewActive = true;
+  document.getElementById('answerBox').classList.add('hidden');
+  document.getElementById('fallbackBox').classList.add('hidden');
+  document.getElementById('recIndicator').classList.add('hidden');
+  document.getElementById('liveCaption').value = '';
+  document.getElementById('fallbackText').value = '';
+  document.getElementById('liveCaption').disabled = false;
+  document.getElementById('manualSendBtn').classList.add('hidden');
+  document.getElementById('retryAnswerBtn').classList.add('hidden');
+  document.getElementById('sendAnswerBtn').classList.add('hidden');
   document.getElementById('interview').style.display = 'block';
   document.getElementById('ivideo').srcObject = state.stream;
   document.getElementById('ivCompany').textContent = state.company.name;
   document.getElementById('ivQtext').textContent = 'まもなく開始します…';
-  speakOnce('これから面接を始めます', () => askQuestion(0));
+  beginRecording();
+  speakOnce('これから面接を始めます', () => {
+    if (state.interviewActive) askQuestion(0);
+  });
 }
 
 function askQuestion(i) {
+  if (!state.interviewActive) return;
   if (i >= state.selectedQuestions.length) return endInterview(false);
-  if (state.mediaRecorder && state.mediaRecorder.state === 'recording') state.mediaRecorder.stop();
 
   state.qIndex = i;
   state.followupCount = 0;
@@ -151,16 +298,20 @@ function askQuestion(i) {
   document.getElementById('answerBox').classList.add('hidden');
   document.getElementById('fallbackBox').classList.add('hidden');
 
-  beginRecording(q);
-  speakOnce(q, () => listenForAnswer());
+  speakOnce(q, () => {
+    if (state.interviewActive) listenForAnswer();
+  });
 }
 
-function beginRecording(question) {
+function beginRecording() {
   state.chunks = [];
   try {
     state.mediaRecorder = new MediaRecorder(state.stream);
     state.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) state.chunks.push(e.data); };
-    state.mediaRecorder.onstop = () => uploadRecording(question, new Blob(state.chunks, { type: 'video/webm' }));
+    state.mediaRecorder.onstop = () => {
+      const practiceLabel = `全${state.selectedQuestions.length}問の面接練習`;
+      uploadRecording(practiceLabel, new Blob(state.chunks, { type: 'video/webm' }));
+    };
     state.mediaRecorder.start();
   } catch (e) { /* recording unsupported; continue without saving video */ }
 }
@@ -174,21 +325,31 @@ async function uploadRecording(question, blob) {
   catch (e) { console.error('録画のアップロードに失敗しました', e); }
 }
 
-function listenForAnswer() {
+function listenForAnswer(resume = false) {
   document.getElementById('ivQtext').textContent = state.dialogueHistory.length
     ? state.dialogueHistory[state.dialogueHistory.length - 1].text
     : state.selectedQuestions[state.qIndex];
   document.getElementById('answerBox').classList.remove('hidden');
   document.getElementById('recIndicator').classList.remove('hidden');
-  document.getElementById('liveCaption').textContent = '';
+  document.getElementById('liveCaption').value = '';
+  document.getElementById('liveCaption').disabled = false;
+  document.getElementById('sendAnswerBtn').classList.add('hidden');
+  document.getElementById('retryAnswerBtn').classList.add('hidden');
   document.getElementById('manualSendBtn').classList.remove('hidden');
 
   if (!speechRecognitionSupported()) {
     document.getElementById('recIndicator').classList.add('hidden');
     document.getElementById('answerBox').classList.add('hidden');
     document.getElementById('fallbackBox').classList.remove('hidden');
-    document.getElementById('fallbackText').value = '';
-    document.getElementById('fallbackText').focus();
+    const fallbackText = document.getElementById('fallbackText');
+    fallbackText.value = '';
+    fallbackText.onkeydown = (event) => {
+      if (event.key === 'Enter' && !event.isComposing && !event.shiftKey) {
+        event.preventDefault();
+        submitFallbackAnswer();
+      }
+    };
+    fallbackText.focus();
     return;
   }
 
@@ -198,26 +359,29 @@ function listenForAnswer() {
   rec.interimResults = true;
   rec.continuous = true;
   let finalText = '';
-  let silenceTimer = null;
   let finished = false;
+  const finishByEnter = (event) => {
+    if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      finish();
+    }
+  };
 
   const finish = () => {
     if (finished) return;
     finished = true;
-    clearTimeout(silenceTimer);
-    clearTimeout(hardTimer);
+    document.removeEventListener('keydown', finishByEnter);
     try { rec.onend = null; rec.stop(); } catch (e) {}
     document.getElementById('recIndicator').classList.add('hidden');
     document.getElementById('manualSendBtn').classList.add('hidden');
-    handleAnswer(finalText.trim() || document.getElementById('liveCaption').textContent.trim());
+    const answerEditor = document.getElementById('liveCaption');
+    answerEditor.value = finalText.trim() || answerEditor.value.trim();
+    answerEditor.disabled = false;
+    document.getElementById('retryAnswerBtn').classList.remove('hidden');
+    document.getElementById('sendAnswerBtn').classList.remove('hidden');
+    answerEditor.focus();
   };
-
-  // Start the "user has gone quiet" clock right away, not just after the
-  // first recognized word — otherwise silence (mic not picked up, etc.)
-  // never times out and the app appears to hang forever.
-  silenceTimer = setTimeout(finish, SILENCE_MS + 2500);
-  // Absolute safety net in case the recognizer never fires onend at all.
-  const hardTimer = setTimeout(finish, 20000);
 
   rec.onresult = (e) => {
     let interim = '';
@@ -225,18 +389,18 @@ function listenForAnswer() {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) finalText += t; else interim += t;
     }
-    document.getElementById('liveCaption').textContent = finalText + interim;
-    clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(finish, SILENCE_MS);
+    document.getElementById('liveCaption').value = finalText + interim;
   };
   rec.onerror = (e) => {
     console.error('SpeechRecognition error:', e.error);
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
       // Permanent failure: switch straight to the text fallback instead of retrying.
-      clearTimeout(silenceTimer); clearTimeout(hardTimer);
       finished = true;
+      document.removeEventListener('keydown', finishByEnter);
       document.getElementById('recIndicator').classList.add('hidden');
       document.getElementById('manualSendBtn').classList.add('hidden');
+      document.getElementById('retryAnswerBtn').classList.add('hidden');
+      document.getElementById('sendAnswerBtn').classList.add('hidden');
       document.getElementById('answerBox').classList.add('hidden');
       document.getElementById('fallbackBox').classList.remove('hidden');
       document.getElementById('fallbackText').focus();
@@ -244,9 +408,29 @@ function listenForAnswer() {
     }
     finish();
   };
-  rec.onend = finish;
+  rec.onend = () => {
+    if (finished || !state.interviewActive) return;
+    try {
+      rec.start();
+    } catch (e) {
+      setTimeout(() => {
+        if (!finished && state.interviewActive) {
+          try { rec.start(); } catch (retryError) { finish(); }
+        }
+      }, 150);
+    }
+  };
 
   document.getElementById('manualSendBtn').onclick = finish;
+  document.getElementById('retryAnswerBtn').onclick = () => listenForAnswer(true);
+  document.getElementById('sendAnswerBtn').onclick = () => {
+    const answer = document.getElementById('liveCaption').value.trim();
+    document.getElementById('retryAnswerBtn').classList.add('hidden');
+    document.getElementById('sendAnswerBtn').classList.add('hidden');
+    document.getElementById('liveCaption').disabled = true;
+    handleAnswer(answer);
+  };
+  document.addEventListener('keydown', finishByEnter);
 
   state.recognition = rec;
   try { rec.start(); } catch (e) { finish(); }
@@ -254,22 +438,39 @@ function listenForAnswer() {
 
 function submitFallbackAnswer() {
   const text = document.getElementById('fallbackText').value.trim();
+  document.getElementById('fallbackText').onkeydown = null;
   document.getElementById('fallbackBox').classList.add('hidden');
   handleAnswer(text);
 }
 
 async function handleAnswer(answerText) {
+  if (!state.interviewActive) return;
   if (!answerText) answerText = '（発言を聞き取れませんでした）';
+  const answeredQuestionIndex = state.qIndex;
+  const currentQuestion = document.getElementById('ivQtext').textContent;
+  const advice = await requestAdvice(answerText, currentQuestion);
+  state.adviceHistory.push({
+    company: state.company.name,
+    question: currentQuestion,
+    answer: answerText,
+    followup_count: state.followupCount,
+    advice,
+    created_at: new Date().toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' }),
+  });
+  saveAdviceHistory();
+  if (!state.interviewActive) return;
   state.dialogueHistory.push({ role: 'student', text: answerText });
   document.getElementById('ivQtext').textContent = '回答を確認しています…';
 
-  const turn = await fetchInterviewerReply();
+  const turn = await fetchInterviewerReply(answeredQuestionIndex);
+  if (!state.interviewActive) return;
   state.dialogueHistory.push({ role: 'interviewer', text: turn.reply });
   document.getElementById('ivQtext').textContent = turn.reply;
 
   speakOnce(turn.reply, () => {
+    if (!state.interviewActive) return;
     if (turn.move_on || state.followupCount >= MAX_FOLLOWUPS) {
-      askQuestion(state.qIndex + 1);
+      askQuestion(answeredQuestionIndex + 1);
     } else {
       state.followupCount++;
       listenForAnswer();
@@ -277,8 +478,9 @@ async function handleAnswer(answerText) {
   });
 }
 
-async function fetchInterviewerReply() {
+async function fetchInterviewerReply(questionIndex = state.qIndex) {
   const controller = new AbortController();
+  state.interviewController = controller;
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const res = await fetch('/api/interview/reply', {
@@ -286,7 +488,7 @@ async function fetchInterviewerReply() {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
-        question: state.selectedQuestions[state.qIndex],
+        question: state.selectedQuestions[questionIndex],
         company: state.company.name,
         history: state.dialogueHistory,
         followup_count: state.followupCount,
@@ -299,16 +501,35 @@ async function fetchInterviewerReply() {
     clearTimeout(timer);
     console.error('AI応答の取得に失敗しました（Ollamaが起動しているか確認してください）:', e);
     return { reply: 'ありがとうございます。次の質問に移ります。', move_on: true };
+  } finally {
+    if (state.interviewController === controller) state.interviewController = null;
   }
 }
 
 function endInterview(aborted) {
+  state.interviewActive = false;
+  if (state.interviewController) {
+    state.interviewController.abort();
+    state.interviewController = null;
+  }
   if (state.recognition) { try { state.recognition.onend = null; state.recognition.stop(); } catch (e) {} }
+  state.recognition = null;
   if (state.mediaRecorder && state.mediaRecorder.state === 'recording') state.mediaRecorder.stop();
+  state.mediaRecorder = null;
   speechSynthesis.cancel();
+  if (state.stream) {
+    state.stream.getTracks().forEach(track => track.stop());
+    state.stream = null;
+  }
+  document.getElementById('ivideo').srcObject = null;
+  document.getElementById('preview').srcObject = null;
   document.getElementById('interview').style.display = 'none';
-  if (!aborted) alert('お疲れ様でした。面接練習が終了しました。録画は「練習履歴」から確認できます。');
-  showScreen('history');
+  if (!aborted) {
+    alert('お疲れ様でした。質問ごとのアドバイスを確認できます。');
+    showScreen('advice');
+  } else {
+    showScreen('history');
+  }
 }
 
 // ---------- history ----------

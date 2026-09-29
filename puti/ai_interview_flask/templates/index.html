@@ -18,6 +18,7 @@
     <div class="user">
       <span>👤 山邨 優輝 様</span>
       <button class="pillbtn" onclick="showScreen('history')">練習履歴</button>
+      <button class="pillbtn" onclick="showScreen('advice')">アドバイス履歴</button>
       <button class="pillbtn" onclick="showScreen('home')">HOME</button>
     </div>
   </div>
@@ -33,21 +34,26 @@
     <p class="empty" id="homeEmpty" style="display:none;">お気に入り登録した企業がまだありません。企業提案機能から気になる企業をお気に入りに追加してください。</p>
   </section>
 
-  <!-- MODE SELECT -->
+  <!-- QUESTION SELECT -->
   <section id="screen-mode" class="panel hidden">
     <div class="stitle"><span class="ico"></span><span id="modeCompanyName"></span>の面接練習</div>
     <fieldset>
-      <legend>練習方法を選択</legend>
-      <label style="display:block;margin-bottom:8px;"><input type="radio" name="mode" value="all" checked onchange="onModeChange()"> 全体練習（過去の質問をすべて練習する）</label>
-      <label style="display:block;"><input type="radio" name="mode" value="pick" onchange="onModeChange()"> 質問を選んで練習する</label>
-    </fieldset>
-    <fieldset id="questionPickBox" class="hidden">
-      <legend>過去に出題された質問</legend>
+      <legend>練習する質問を選択</legend>
+      <div class="row" style="margin-bottom:12px;">
+        <button class="btn ghost" type="button" onclick="selectAllQuestions()">すべて選択</button>
+        <button class="btn ghost" type="button" onclick="clearAllQuestions()">すべてチェックを外す</button>
+      </div>
+      <label class="qitem">
+        <input type="checkbox" id="randomQuestion" onchange="selectRandomQuestion()">
+        ランダム
+        <select id="randomCount" disabled onchange="selectRandomQuestion()" aria-label="ランダムに選ぶ質問数"></select>
+        問
+      </label>
       <div id="qList"></div>
     </fieldset>
     <div class="row">
       <button class="btn ghost" onclick="showScreen('home')">戻る</button>
-      <button class="btn" onclick="goToCameraCheck()">次へ（カメラ確認）</button>
+      <button class="btn" onclick="goToCameraCheck()">面接練習を開始</button>
     </div>
   </section>
 
@@ -71,6 +77,14 @@
     <div class="stitle"><span class="ico"></span>練習履歴</div>
     <div id="logList"></div>
     <p class="empty hidden" id="historyEmpty">まだ練習記録はありません。</p>
+  </section>
+
+  <!-- ADVICE HISTORY -->
+  <section id="screen-advice" class="panel hidden">
+    <div class="stitle"><span class="ico"></span>アドバイス履歴</div>
+    <p class="advice-history-intro">面接中の回答と、深掘り質問への回答を質問ごとに振り返れます。</p>
+    <div id="adviceHistoryList"></div>
+    <p class="empty hidden" id="adviceHistoryEmpty">まだアドバイス履歴はありません。</p>
   </section>
 
   <!-- PLAYBACK -->
@@ -97,8 +111,10 @@
     <div class="qtext" id="ivQtext">まもなく開始します…</div>
     <div class="answerBox hidden" id="answerBox">
       <span class="rec hidden" id="recIndicator"><span class="b"></span>回答を聞いています…</span>
-      <p class="liveCaption" id="liveCaption"></p>
+      <textarea class="liveCaption" id="liveCaption" rows="3" placeholder="認識した回答をここで修正できます"></textarea>
       <button class="btn ghost hidden" id="manualSendBtn" style="margin-top:8px;">回答が終わったら押す</button>
+      <button class="btn ghost hidden" id="retryAnswerBtn" style="margin-top:8px;">音声入力をやり直す</button>
+      <button class="btn hidden" id="sendAnswerBtn" style="margin-top:8px;">この回答で送信</button>
     </div>
     <div class="fallbackBox hidden" id="fallbackBox">
       <textarea id="fallbackText" rows="2" placeholder="この端末では音声認識が使えないため、回答をここに入力してください"></textarea>

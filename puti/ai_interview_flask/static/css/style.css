@@ -48,7 +48,8 @@ video{width:100%;border-radius:6px;background:#000;max-height:400px;object-fit:c
 @keyframes pulse{50%{opacity:.2;}}
 .cap .ctrls{display:flex;gap:10px;}
 .answerBox{margin-top:4px;}
-.liveCaption{min-height:1.4em;font-size:15px;opacity:.85;margin:8px 0 0;}
+.liveCaption{display:block;width:100%;min-height:1.4em;margin:8px 0 0;padding:8px 10px;border:1px solid rgba(255,255,255,.3);border-radius:5px;background:rgba(255,255,255,.08);color:#fff;font:15px/1.6 inherit;resize:vertical;}
+.liveCaption::placeholder{color:rgba(255,255,255,.65);}
 .fallbackBox{display:flex;gap:10px;align-items:flex-end;margin-top:10px;}
 .fallbackBox textarea{flex:1;border-radius:5px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.08);color:#fff;padding:8px 10px;font-size:14px;resize:none;}
 .topbar{position:absolute;top:0;left:0;right:0;padding:calc(16px + env(safe-area-inset-top,0px)) 20px 16px;display:flex;justify-content:space-between;color:#fff;font-size:13px;}
@@ -56,10 +57,28 @@ video{width:100%;border-radius:6px;background:#000;max-height:400px;object-fit:c
 .hidden{display:none !important;}
 .logrow{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--border);border-radius:6px;padding:14px 18px;margin-bottom:12px;cursor:pointer;background:#fbfcfe;}
 .logrow:hover{background:var(--blue-pale);}
+.advice-history-intro{margin:-8px 0 20px;color:#666;font-size:13px;}
+.advice-history-card{border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:6px;padding:18px;margin-bottom:16px;background:#fbfcfe;}
+.advice-history-meta{display:flex;justify-content:space-between;gap:12px;align-items:center;color:#666;font-size:12px;}
+.advice-history-meta strong{color:var(--blue);font-size:13px;}
+.advice-history-card h3{margin:12px 0 8px;font-size:16px;line-height:1.6;}
+.advice-answer{margin:0;padding:10px 12px;border-radius:4px;background:#f0f3f8;color:#444;font-size:13px;line-height:1.7;white-space:pre-wrap;}
+.advice-history-summary{margin:10px 0;font-size:13px;line-height:1.7;font-weight:700;}
+.advice-columns{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+.advice-columns>div{padding:10px;border-top:2px solid var(--border);}
+.advice-columns h4{margin:0 0 7px;color:var(--blue);font-size:12px;}
+.advice-columns ul{margin:0;padding-left:18px;color:#555;font-size:12px;line-height:1.7;}
 .empty{color:#888;font-size:14px;padding:20px 4px;}
 @media (prefers-color-scheme: dark){
   body{background:#14181f;color:#e6e9ef;}
   header,.panel,.card,.logrow{background:#1c212b;border-color:#2c3340;}
   .crumb{background:#20262f;color:#aab2c0;}
   .stitle{color:#5b8bf0;}
+}
+@media (max-width:680px){
+  .headrow .user{gap:7px;flex-wrap:wrap;justify-content:flex-end;}
+  .pillbtn{padding:7px 10px;font-size:12px;}
+  .advice-history-meta{display:block;}
+  .advice-history-meta span{display:block;margin-top:4px;}
+  .advice-columns{grid-template-columns:1fr;gap:8px;}
 }

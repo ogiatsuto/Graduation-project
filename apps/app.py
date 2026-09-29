@@ -1,4 +1,124 @@
-from flask import Flask, render_template
+import json
+import os
+import urllib.request
+
+from flask import Flask, jsonify, render_template, request
+
+
+def build_heuristic_advice(answer: str, question: str = '', expression_score: int = 0, company: str = '', mode: str = '') -> dict:
+    text = (answer or '').strip()
+    detail_words = ['経験', '課題', '工夫', '役割', '結果', '学び', '改善', '具体', '強み', '理由', '行動', '対応']
+    has_action = any(word in text for word in ['行動', '工夫', '対応', '役割', '具体的'])
+    has_result = any(word in text for word in ['結果', '成果', '学び', '改善', '数字'])
+    expression_score = max(0, min(100, int(expression_score or 0)))
+
+    strengths = []
+    improvements = []
+    tips = []
+
+    if len(text) >= 60:
+        strengths.append('回答の量があり、意図を説明しようとしている印象です。')
+    else:
+        improvements.append('もう少し具体例を入れると、面接官に伝わりやすくなります。')
+
+    if has_action:
+        strengths.append('どんな行動を取ったかが伝わっていて、説得力があります。')
+    else:
+        improvements.append('「何をしたか」を1つ具体的に加えると、回答が強くなります。')
+
+    if has_result:
+        strengths.append('結果や学びまで言及できていて、成長が伝わります。')
+    else:
+        improvements.append('最後に結果や学びを添えると、回答の完成度が上がります。')
+
+    if expression_score < 55:
+        improvements.append('表情が少し硬めに見えます。最初の30秒は少し笑顔を作ると安心感が増えます。')
+    elif expression_score >= 70:
+        strengths.append('表情が安定していて、落ち着いて話せている印象です。')
+    else:
+        strengths.append('表情は概ね安定しており、自然な話し方が見えます。')
+
+    summary = '話の軸は良く、次は具体的な行動と結果を一緒に伝えるとさらに良くなります。'
+    if not text:
+        summary = '回答がまだ短いため、最初にエピソードを一つ決めて、行動・結果・学びを順に話すと伝わりやすくなります。'
+
+    if '質問' in question or '自己紹介' in question:
+        tips.append('結論を最初に一言で伝え、そのあとに具体例を続けると聞き手が理解しやすくなります。')
+    else:
+        tips.append('「なぜその経験をしたのか」「どう変化したのか」を加えると、面接官の印象が強くなります。')
+
+    tips.append('話すスピードを落として、1つのテーマごとに息を入れると自然で伝わりやすくなります。')
+
+    return {
+        'summary': summary,
+        'strengths': strengths[:3],
+        'improvements': improvements[:3],
+        'tips': tips[:2],
+    }
+
+
+def build_summary(answer: str, expression_score: int = 0, company: str = '', mode: str = '') -> dict:
+    text = (answer or '').strip()
+    score = max(0, min(100, int(expression_score or 0)))
+    answer_score = 0
+    if text:
+        detail_words = ['経験', '課題', '工夫', '役割', '結果', '学び', '改善', '具体', '強み', '理由', '行動']
+        detail_count = sum(1 for word in detail_words if word in text)
+        sentence_count = len([char for char in text if char in '。！？!?'])
+        answer_score = min(100, int(len(text) * 0.32 + detail_count * 7 + sentence_count * 5))
+    total_score = max(0, min(100, int(answer_score * 0.7 + score * 0.3)))
+    if total_score >= 80:
+        verdict = 'かなり良いです。自分の強みが伝わる形になっています。'
+    elif total_score >= 60:
+        verdict = '良い基礎があります。もう一歩だけ、具体例を増やすと完成度が上がります。'
+    else:
+        verdict = 'ここからは軸を絞って、行動・結果・学びを一つずつ丁寧に伝えると強くなります。'
+    return {
+        'total_score': total_score,
+        'answer_score': min(100, answer_score),
+        'expression_score': score,
+        'verdict': verdict,
+        'company': company or '企業',
+        'mode': mode or '面接',
+    }
+
+
+def fallback_question(answer: str, question_number: int = 0, previous_question: str = '') -> str:
+    patterns = [
+        (('チーム', '協力', 'メンバー'), [
+            'その経験で、チームの中であなたが担った役割を教えてください。',
+            'メンバーと意見が合わないとき、どのように調整しましたか？',
+            'チームでの経験を入社後にどう活かしたいですか？'
+        ]),
+        (('失敗', '苦労', '課題'), [
+            'その課題に最初に気づいたきっかけを教えてください。',
+            '課題を解決するために、具体的にどんな行動をしましたか？',
+            'その経験から得た学びを、次の行動でどう活かしましたか？'
+        ]),
+        (('強み', '得意'), [
+            'その強みが最も活かされた具体的な場面を教えてください。',
+            'その強みを伸ばすために、普段から意識していることはありますか？',
+            'その強みが仕事で活きるのは、どのような場面だと思いますか？'
+        ]),
+        (('結果', '成果'), [
+            'その成果を出すために、特に意識して取り組んだことは何ですか？',
+            '成果を数値や周囲の反応で説明すると、どのようになりますか？',
+            'その成果を出した経験から、次に改善したい点はありますか？'
+        ]),
+    ]
+    for keywords, questions in patterns:
+        if any(keyword in answer for keyword in keywords):
+            return questions[question_number % len(questions)]
+    generic_questions = [
+        'その経験に取り組もうと思ったきっかけを教えてください。',
+        'その中で一番難しかったことと、乗り越え方を教えてください。',
+        'あなた自身が担った役割と、具体的な行動を教えてください。',
+        '周囲からはどのような反応や評価がありましたか？',
+        'その経験から得た学びを、今後どのように活かしたいですか？'
+    ]
+    if '工夫した点' in previous_question:
+        return 'その工夫によって、結果や周囲にどのような変化がありましたか？'
+    return generic_questions[question_number % len(generic_questions)]
 
 
 def create_app(config_name: str = "local"):
@@ -440,6 +560,126 @@ def create_app(config_name: str = "local"):
             "findings": findings,
         }
         return jsonify(result)
+
+    @app.post("/api/next-question")
+    def next_question():
+        payload = request.get_json(silent=True) or {}
+        answer = str(payload.get("answer", "")).strip()
+        previous_question = str(payload.get("previous_question", "")).strip()
+        question_number = int(payload.get("question_number", 0))
+        fallback = fallback_question(answer, question_number, previous_question)
+        prompt = (
+            'あなたは日本語の面接官です。候補者の回答を踏まえた、自然な追質問を1つだけ作ってください。'
+            '回答を繰り返さず、具体的な経験・行動・結果・学びのいずれかを深掘りしてください。'
+            '質問文だけを返し、説明や番号は付けないでください。\n'
+            f'直前の質問: {previous_question}\n候補者の回答: {answer or "回答なし"}\n'
+            '直前の質問と同じ聞き方を繰り返さないでください。'
+        )
+        ollama_url = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434/api/generate')
+        body = json.dumps({
+            'model': os.getenv('OLLAMA_MODEL', 'qwen2.5:3b'),
+            'prompt': prompt,
+            'stream': False,
+            'options': {'temperature': 0.4}
+        }).encode('utf-8')
+        try:
+            request_data = urllib.request.Request(ollama_url, data=body, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request_data, timeout=20) as response:
+                result = json.loads(response.read().decode('utf-8'))
+            question = str(result.get('response', '')).strip().replace('\n', ' ')
+            if question and len(question) <= 120:
+                return jsonify(question=question, source='ollama')
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        return jsonify(question=fallback, source='fallback')
+
+    @app.post("/api/interview-advice")
+    def interview_advice():
+        payload = request.get_json(silent=True) or {}
+        answer = str(payload.get('answer', '')).strip()
+        question = str(payload.get('question', '')).strip()
+        expression_score = int(payload.get('expression_score', 0) or 0)
+        company = str(payload.get('company', '')).strip()
+        mode = str(payload.get('mode', '')).strip()
+        advice = build_heuristic_advice(answer, question, expression_score, company, mode)
+        prompt = (
+            'あなたは就職面接のコーチです。候補者の回答と表情の安定度を評価し、'
+            '面接の良い点・改善点・次の一言をまとめてJSONで返してください。'
+            'JSONのキーは summary, strengths, improvements, tips のみとし、'
+            'strengths, improvements, tips は各3個までの配列にしてください。\n'
+            f'企業名: {company or "不明"}\n面接形式: {mode or "不明"}\n'
+            f'質問: {question or "不明"}\n回答: {answer or "回答なし"}\n'
+            f'表情スコア: {expression_score}\n'
+            '日本語で簡潔に返してください。'
+        )
+        ollama_url = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434/api/generate')
+        body = json.dumps({
+            'model': os.getenv('OLLAMA_MODEL', 'qwen2.5:3b'),
+            'prompt': prompt,
+            'stream': False,
+            'options': {'temperature': 0.4}
+        }).encode('utf-8')
+        try:
+            request_data = urllib.request.Request(ollama_url, data=body, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request_data, timeout=20) as response:
+                result = json.loads(response.read().decode('utf-8'))
+            candidate = str(result.get('response', '')).strip()
+            if candidate:
+                cleaned = candidate.strip('`')
+                try:
+                    parsed = json.loads(cleaned)
+                    if isinstance(parsed, dict) and parsed.get('summary'):
+                        return jsonify(parsed)
+                except (TypeError, ValueError):
+                    pass
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        return jsonify(advice)
+
+    @app.post("/api/interview-summary")
+    def interview_summary():
+        payload = request.get_json(silent=True) or {}
+        answer = str(payload.get('answer', '')).strip()
+        expression_score = int(payload.get('expression_score', 0) or 0)
+        company = str(payload.get('company', '')).strip()
+        mode = str(payload.get('mode', '')).strip()
+        summary = build_summary(answer, expression_score, company, mode)
+        return jsonify(summary)
+
+    @app.post("/api/ai-consult")
+    def ai_consult():
+        payload = request.get_json(silent=True) or {}
+        question = str(payload.get('question', '')).strip()
+        answer = str(payload.get('answer', '')).strip()
+        company = str(payload.get('company', '')).strip()
+        mode = str(payload.get('mode', '')).strip()
+        expression_score = int(payload.get('expression_score', 0) or 0)
+        prompt = (
+            'あなたは就職面接のコーチです。候補者の回答を踏まえて、相手への伝え方や改善点を相談に乗ってください。'
+            '話し方、言葉の選び方、練習の方向性を具体的にアドバイスしてください。'
+            '120字以内の日本語で、相談の答えだけを返してください。\n'
+            f'企業名: {company or "不明"}\n面接形式: {mode or "不明"}\n'
+            f'質問: {question or "不明"}\n回答: {answer or "回答なし"}\n'
+            f'表情スコア: {expression_score}\n'
+        )
+        ollama_url = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434/api/generate')
+        body = json.dumps({
+            'model': os.getenv('OLLAMA_MODEL', 'qwen2.5:3b'),
+            'prompt': prompt,
+            'stream': False,
+            'options': {'temperature': 0.5}
+        }).encode('utf-8')
+        try:
+            request_data = urllib.request.Request(ollama_url, data=body, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request_data, timeout=20) as response:
+                result = json.loads(response.read().decode('utf-8'))
+            advice = str(result.get('response', '')).strip().replace('\n', ' ')
+            if advice:
+                return jsonify({'message': advice})
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        fallback = '結論を先に伝え、そのあとに具体例を入れると伝わりやすくなります。特に「行動」「結果」「学び」をセットで話すと印象が強くなります。'
+        return jsonify({'message': fallback})
 
     return app
 
