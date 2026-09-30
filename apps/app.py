@@ -366,12 +366,18 @@ def create_app(config_name: str = "local"):
             criteria_findings = evaluate_interview_criteria(corrected_essay)
             ai_result["findings"] = [
                 {
-                    "type": "良い点" if criterion["ok"] else "改善",
+                    "type": "良い点" if criterion["ok"] else ("警告" if criterion["title"] == "不適切な言葉" else "改善"),
                     "title": criterion["title"],
                     "body": criterion["good"] if criterion["ok"] else criterion["advice"],
                 }
                 for criterion in criteria_findings
             ] + ai_result["findings"]
+            if len(corrected_essay.replace("\n", "")) <= 10:
+                ai_result["findings"].insert(0, {
+                    "type": "警告",
+                    "title": "文字数が少なすぎます",
+                    "body": "文章が10文字以下です。質問への回答として、結論・理由・具体的な経験を含む文章に増やしてください。",
+                })
             if question_guidance:
                 ai_result["findings"].insert(0, {
                     "type": "改善",
@@ -398,9 +404,15 @@ def create_app(config_name: str = "local"):
         findings = []
         for criterion in evaluate_interview_criteria(essay):
             findings.append({
-                "type": "良い点" if criterion["ok"] else "改善",
+                "type": "良い点" if criterion["ok"] else ("警告" if criterion["title"] == "不適切な言葉" else "改善"),
                 "title": criterion["title"],
                 "body": criterion["good"] if criterion["ok"] else criterion["advice"],
+            })
+        if character_count <= 10:
+            findings.append({
+                "type": "警告",
+                "title": "文字数が少なすぎます",
+                "body": "文章が10文字以下です。質問への回答として、結論・理由・具体的な経験を含む文章に増やしてください。",
             })
         if question_guidance:
             findings.append({

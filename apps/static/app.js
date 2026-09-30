@@ -47,7 +47,7 @@ function renderReport(data) {
   const improvementFindings = data.findings.filter((finding) => finding.type !== '良い点');
   const renderFindings = (findings) => findings.map((finding) => `
     <article class="finding">
-      <span class="finding-type ${finding.type === '良い点' ? 'good' : ''}">${finding.type}</span>
+      <span class="finding-type ${finding.type === '良い点' ? 'good' : finding.type === '警告' ? 'warning' : ''}">${finding.type}</span>
       <h3>${finding.title}</h3><p>${finding.body}</p>
     </article>`).join('');
   document.querySelector('#findings').innerHTML = `
