@@ -1,0 +1,3 @@
+static/uploads/*.webm
+__pycache__/
+*.pyc
