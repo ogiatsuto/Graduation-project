@@ -248,6 +248,8 @@ async function requestAdvice(answer, question) {
       improvements: ['「自分が何をしたか」を一つ具体的に説明しましょう。'],
       tips: ['結論・行動・結果・学びの順に整理して話しましょう。'],
       criteria: [],
+      concrete_advice: '',
+      suggested_answer: '',
     };
   } finally {
     if (state.interviewController === controller) state.interviewController = null;
@@ -261,22 +263,38 @@ function renderAdviceHistory() {
   empty.classList.toggle('hidden', state.adviceHistory.length > 0);
   list.innerHTML = state.adviceHistory.slice().reverse().map((entry, index) => {
     const advice = entry.advice || {};
-    const items = (values, fallback) => (values && values.length ? values : [fallback]).map(value => `<li>${escapeAdviceText(adviceItemText(value))}</li>`).join('');
-    const criteriaStatus = { good: '良好', needs_improvement: '改善が必要', not_applicable: '対象外' };
-    const criteria = (advice.criteria || []).map(item => `<article class="criteria-item ${escapeAdviceText(item.status || '')}">
-      <div class="criteria-heading"><strong>${escapeAdviceText(item.label)}</strong><span>${escapeAdviceText(criteriaStatus[item.status] || '確認中')}${item.score !== null && item.score !== undefined ? `・${escapeAdviceText(item.score)}点` : ''}</span></div>
-      <small>${escapeAdviceText(item.method)}</small>
-      <p><b>根拠：</b>${escapeAdviceText(item.evidence)}</p>
-      <p><b>改善：</b>${escapeAdviceText(item.feedback)}</p>
-    </article>`).join('');
     const summary = adviceItemText(advice.summary || '回答を確認しました。');
+    const statusLabels = { good: 'できています', needs_improvement: '改善が必要です', not_applicable: '今回は対象外です' };
+    const criteriaFeedback = (advice.criteria || []).map(item => {
+      const label = item.label || '評価項目';
+      const status = statusLabels[item.status] || '確認が必要です';
+      const evidence = adviceItemText(item.evidence);
+      const feedback = item.status === 'needs_improvement' ? adviceItemText(item.feedback) : '';
+      return `${label}は${status}。${evidence}${feedback ? ` ${feedback}` : ''}`;
+    });
+    const fallbackFeedback = [
+      ...(advice.improvements || []).map(item => adviceItemText(item)),
+      ...(advice.tips || []).map(item => adviceItemText(item)),
+    ];
+    const combinedAdvice = [summary, ...(criteriaFeedback.length ? criteriaFeedback : fallbackFeedback)]
+      .filter(Boolean)
+      .join(' ');
+    const concreteAdvice = adviceItemText(advice.concrete_advice);
+    const suggestedAnswer = adviceItemText(advice.suggested_answer);
+    
+    let adviceSections = '';
+    if (concreteAdvice) {
+      adviceSections += `<div class="concrete-advice-section"><h4>📝 具体的な改善提案</h4><p>${escapeAdviceText(concreteAdvice)}</p></div>`;
+    }
+    if (suggestedAnswer) {
+      adviceSections += `<div class="suggested-answer-section"><h4>💡 理想的な回答例</h4><p class="suggested-answer-text">${escapeAdviceText(suggestedAnswer)}</p></div>`;
+    }
+    
     return `<article class="advice-history-card">
       <div class="advice-history-meta"><strong>${escapeAdviceText(entry.company)}</strong><span>${escapeAdviceText(entry.created_at)} ・ ${entry.followup_count ? `深掘り ${entry.followup_count}回目` : 'メイン質問'}</span></div>
       <h3>${escapeAdviceText(entry.question)}</h3>
       <p class="advice-answer">${escapeAdviceText(entry.answer)}</p>
-      <p class="advice-history-summary">${escapeAdviceText(summary)}</p>
-      ${criteria ? `<div class="criteria-list"><h4>評価項目</h4>${criteria}</div>` : ''}
-      <div class="advice-columns"><div><h4>良い点</h4><ul>${items(advice.strengths, '自分の言葉で回答できています。')}</ul></div><div><h4>改善ポイント</h4><ul>${items(advice.improvements, '具体例を一つ加えてみましょう。')}</ul></div><div><h4>次の一手</h4><ul>${items(advice.tips, '結論から話してみましょう。')}</ul></div></div>
+      ${adviceSections}
     </article>`;
   }).join('');
 }
@@ -304,9 +322,9 @@ function startInterview() {
   });
 }
 
-function askQuestion(i) {
+function askQuestion(i, endReason = '') {
   if (!state.interviewActive) return;
-  if (i >= state.selectedQuestions.length) return endInterview(false);
+  if (i >= state.selectedQuestions.length) return endInterview(false, endReason);
 
   state.qIndex = i;
   state.followupCount = 0;
@@ -488,8 +506,9 @@ async function handleAnswer(answerText) {
 
   speakOnce(turn.reply, () => {
     if (!state.interviewActive) return;
-    if (turn.move_on || state.followupCount >= MAX_FOLLOWUPS) {
-      askQuestion(answeredQuestionIndex + 1);
+    const followupLimitReached = !turn.move_on && state.followupCount + 1 >= MAX_FOLLOWUPS;
+    if (turn.move_on || followupLimitReached) {
+      askQuestion(answeredQuestionIndex + 1, followupLimitReached ? '深掘り質問が2回に達したため、以上で面接を終了します。' : '');
     } else {
       state.followupCount++;
       listenForAnswer();
@@ -525,7 +544,7 @@ async function fetchInterviewerReply(questionIndex = state.qIndex) {
   }
 }
 
-function endInterview(aborted) {
+function endInterview(aborted, endReason = '') {
   state.interviewActive = false;
   if (state.interviewController) {
     state.interviewController.abort();
@@ -544,7 +563,7 @@ function endInterview(aborted) {
   document.getElementById('preview').srcObject = null;
   document.getElementById('interview').style.display = 'none';
   if (!aborted) {
-    alert('お疲れ様でした。質問ごとのアドバイスを確認できます。');
+    alert(endReason || 'お疲れ様でした。以上で面接を終了します。質問ごとのアドバイスを確認できます。');
     showScreen('advice');
   } else {
     showScreen('history');

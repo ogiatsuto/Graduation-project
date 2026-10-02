@@ -97,7 +97,7 @@ def build_rule_based_criteria(answer):
     first_person = bool(re.search(r'(わたし|わたくし|私|僕|ぼく)', text))
     polite_endings = bool(re.search(r'(です|ます|でした|ました|ません|でしょう|ください)(?:[。！？!?]|$)', text))
     casual_endings = bool(re.search(r'(だよ|だね|じゃん|だろ|だったよ|するよ|したよ)[。！？!?]?\s*$', text))
-    ng_words = ['やばい', 'マジ', 'まじ', 'めっちゃ', '超', 'ウケる', 'ぶっちゃけ', 'とりま']
+    ng_words = ['やばい', 'マジ', 'まじ', 'めっちゃ', '超', 'ウケる', 'ぶっちゃけ', 'とりま', 'えっと', 'えーと', 'あのー', 'なんか', 'そのー', 'まあ', 'バイト', '就活']
     honorific_words = ['おっしゃられる', 'ご覧になられる', '拝見させていただく', 'させていただかさせて']
     found_ng_words = [word for word in ng_words + honorific_words if word in text]
     ending_habit = bool(re.search(r'(です|ます|だ|ね|よ)[ー〜～!！]+|[ー〜～]{2,}|[!！?？]{2,}', text))
@@ -115,7 +115,7 @@ def build_rule_based_criteria(answer):
             'status': 'good' if not found_ng_words else 'needs_improvement',
             'score': 100 if not found_ng_words else 0,
             'evidence': '不適切な登録語は見つかりませんでした。' if not found_ng_words else f'確認された語句: {"、".join(found_ng_words)}',
-            'feedback': '俗語や過剰な敬語を避け、面接に適した自然な表現に言い換えましょう。' if found_ng_words else '面接に適した表現を維持できています。',
+            'feedback': f'回答に「{"」「".join(found_ng_words)}」が含まれています。俗語・略語・つなぎ言葉は避け、正式な表現に言い換えましょう。' if found_ng_words else '面接に適した表現を維持できています。',
         },
         {
             'id': 'speech_habit', 'label': '言葉癖', 'method': 'ルールベース（Whisperの書き起こし精度に依存）',
@@ -153,50 +153,11 @@ def build_llm_fallback_criteria(followup_count):
 
 def build_interview_advice(answer, question='', followup_count=0):
     text = (answer or '').strip()
-    strengths = []
-    improvements = []
-    tips = []
-    has_action = any(word in text for word in ['行動', '工夫', '役割', '対応', '取り組'])
-    has_result = any(word in text for word in ['結果', '成果', '変化', '数字', '増え', '減っ'])
-    has_learning = any(word in text for word in ['学び', '気づ', '活か', '改善'])
-    has_reason = any(word in text for word in ['理由', 'きっかけ', 'なぜ', 'ため'])
-
-    if len(text) >= 60:
-        strengths.append('回答に十分な情報があり、経験を伝えようとしています。')
-    else:
-        improvements.append('具体的なエピソードをもう少し加えると、内容が伝わりやすくなります。')
-    if has_action:
-        strengths.append('あなた自身の行動が含まれていて、主体性が伝わります。')
-    else:
-        improvements.append('「自分が何をしたか」を一つ具体的に説明しましょう。')
-    if has_result:
-        strengths.append('結果や学びまで話せていて、経験の価値が伝わります。')
-    else:
-        improvements.append('行動のあとに、相手や状況がどう変わったかを添えましょう。')
-    if not has_learning:
-        improvements.append('最後に、その経験から得た学びや次に活かすことを加えましょう。')
-    if any(word in question for word in ['志望', '応募']):
-        tips.append('企業のどの点に惹かれたのかと、自分の経験がどう活きるかを結び付けましょう。')
-    elif any(word in question for word in ['自己紹介', '自己PR', '強み']):
-        tips.append('最初に結論を一言で伝え、そのあとに強みの具体例を続けましょう。')
-    elif has_reason:
-        tips.append('きっかけだけでなく、その判断の基準や考え方も一言加えましょう。')
-    else:
-        tips.append('結論・行動・結果・学びのうち、まだ薄い部分を一つ補って話しましょう。')
-    tips.append('要点ごとに少し間を置くと、内容がより伝わりやすくなります。')
-    summary = '回答の軸は伝わっています。'
-    if not has_action:
-        summary = '経験の概要は伝わっています。あなた自身の行動を中心にすると、説得力が増します。'
-    elif not has_result:
-        summary = '行動は伝わっています。行動によって起きた結果や変化まで話すと、回答が完成します。'
-    elif not has_learning:
-        summary = '経験と結果は伝わっています。最後に学びや入社後への活かし方を加えると印象に残ります。'
+    
+    # LLMに完全に任せるため、簡易なフォールバックのみ
     return {
-        'summary': summary,
-        'strengths': strengths[:3],
-        'improvements': improvements[:3],
-        'tips': tips[:2],
-        'criteria': build_rule_based_criteria(text) + build_llm_fallback_criteria(followup_count),
+        'concrete_advice': '回答の内容を詳しく教えていただければ、より具体的なアドバイスを提供できます。',
+        'suggested_answer': text,
     }
 
 
@@ -252,7 +213,21 @@ def normalize_advice_payload(value, fallback):
         'improvements': normalize_advice_items(value.get('improvements') or value.get('改善点') or fallback['improvements']),
         'tips': normalize_advice_items(value.get('tips') or value.get('次の一手') or fallback['tips']),
         'criteria': normalize_criteria(value.get('criteria'), fallback['criteria']),
+        'concrete_advice': str(value.get('concrete_advice') or fallback.get('concrete_advice') or '').strip(),
+        'suggested_answer': str(value.get('suggested_answer') or fallback.get('suggested_answer') or '').strip(),
     }
+
+
+def analyze_answer_gaps(answer):
+    text = (answer or '').strip()
+    signals = {
+        '動機': any(word in text for word in ('理由', 'きっかけ', 'なぜ', '目指し', '興味')),
+        '本人の行動': any(word in text for word in ('私が', 'わたしが', '担当', '役割', '行動', '工夫', '取り組', '対応')),
+        '具体的な状況': any(word in text for word in ('いつ', 'どこ', '誰', 'チーム', '学校', 'アルバイト', '授業', 'サークル')),
+        '結果': any(word in text for word in ('結果', '成果', '変化', '数字', '増え', '減っ', '達成', '評価')),
+        '学び・活かし方': any(word in text for word in ('学び', '気づ', '活か', '改善', '今後', '入社後')),
+    }
+    return [name for name, present in signals.items() if not present]
 
 
 def fallback_followup(question, history, followup_count, latest_answer_override=''):
@@ -264,6 +239,16 @@ def fallback_followup(question, history, followup_count, latest_answer_override=
             if isinstance(turn, dict) and turn.get('role') == 'student':
                 latest_answer = str(turn.get('text', ''))
                 break
+    gaps = analyze_answer_gaps(latest_answer)
+    gap_questions = {
+        '動機': 'その行動を始めようと思ったきっかけや理由を教えてください。',
+        '本人の行動': 'その場面で、あなた自身が具体的にしたことを教えてください。',
+        '具体的な状況': 'その経験は、いつどのような状況で起きたのか教えてください。',
+        '結果': 'その行動によって、結果や周囲にどのような変化がありましたか？',
+        '学び・活かし方': 'その経験から得た学びを、今後どのように活かしたいですか？',
+    }
+    if gaps:
+        return gap_questions[gaps[followup_count % len(gaps)]], False
     patterns = [
         (('チーム', '協力', 'メンバー'), [
             'その経験で、チームの中であなたが担った役割を教えてください。',
@@ -367,6 +352,7 @@ def api_interview_reply():
         for t in history
     )
     latest_answer = next((str(t.get('text', '')).strip() for t in reversed(history) if t.get('role') == 'student'), '')
+    answer_gaps = analyze_answer_gaps(latest_answer)
 
     system_prompt = (
         "あなたは新卒採用の面接官です。就活生と一対一の面接をしています。\n"
@@ -374,7 +360,9 @@ def api_interview_reply():
         f"今回のメインの質問: {question}\n"
         f"学生の直前の回答: {latest_answer or '回答なし'}\n"
         "回答を、主張・理由・本人の行動・工夫・結果・学びの観点で確認してください。"
-        "まだ説明されていない観点を1つだけ選び、回答に出てきた固有の経験や行動に結び付けて深掘りしてください。"
+        f"回答から不足している可能性がある観点: {', '.join(answer_gaps) if answer_gaps else '大きな不足なし'}。"
+        "不足している観点を1つだけ優先し、回答に出てきた固有の経験や行動に結び付けて深掘りしてください。"
+        "回答が自己紹介であっても、実際に話された経験・役割・強みだけを根拠にしてください。"
         "直前の質問や、すでに回答された内容をそのまま聞き直してはいけません。"
         "回答にない活動や人物を勝手に追加してはいけません。『リソース』『就活活動』『発言内容』のような抽象的な言い換えは禁止です。"
         "質問には回答中の名詞を少なくとも1つ使い、実際の面接で自然な『具体的に教えてください』『どう対応しましたか』の形にしてください。"
@@ -460,24 +448,49 @@ def api_interview_advice():
         followup_count = 0
     dialogue_history = data.get('dialogue_history') or []
     fallback = build_interview_advice(answer, question, followup_count)
+    
+    # ルールベースの評価結果を取得
+    rule_based_criteria = build_rule_based_criteria(answer)
+    llm_fallback_criteria = build_llm_fallback_criteria(followup_count)
+    
+    # ルールベース評価結果を文字列化してプロンプトに渡す
+    criteria_text = '\n'.join([
+        f"- {c['label']}: {c['status']} (スコア: {c['score']}) | 根拠: {c['evidence']} | フィードバック: {c['feedback']}"
+        for c in rule_based_criteria + llm_fallback_criteria
+    ])
+    
     prompt = (
-        'あなたは就職面接の専門コーチです。候補者の1回答を分析してください。'
-        '質問に答えられている点と不足している点を、回答に出てきた経験・役割・行動・結果に触れて具体的に指摘してください。'
-        '同じ定型文を避け、回答内容だけを根拠にしてください。\n'
-        '評価criteriaは次の6項目（first_person_ending、inappropriate_words、speech_habit、deep_followup、structure、specificity）を必ず含め、各項目にid、status（good/needs_improvement/not_applicable）、score（0から100またはnull）、'
-        'evidence（回答から引用または根拠）、feedbackを付けてください。'
-        'deep_followupは深掘り質問への回答だけを評価し、メイン質問ならnot_applicableにしてください。'
-        'structureは「強み→エピソード→活かし方」の有無と順序、specificityは5W1H・数字・学びを回答から引用して判定してください。'
-        'inappropriate_wordsは登録NGワード以外でも、明らかに面接に不適切な表現がある場合だけLLM補足してください。'
-        'summaryは80字以内、strengths/improvements/tipsは各最大3個としてください。\n'
+        'あなたは就職面接の専門コーチです。候補者の1回答を分析し、具体的な改善提案と理想的な回答例を作成してください。\n'
+        '回答内容に基づいて、抽象的なアドバイスではなく、必ず回答中の具体的な言葉を引用してアドバイスを作成してください。\n\n'
+        '【評価基準の結果】\n'
+        f'{criteria_text}\n\n'
+        '【最重要ルール】\n'
+        'concrete_adviceとsuggested_answerは必ず入力してください。空欄にしないでください。\n\n'
+        '★ concrete_advice（具体的な改善提案）の作成ルール:\n'
+        '- 回答中の具体的な言葉やフレーズを必ず引用してください\n'
+        '- 「こう直してください」という具体的な言い換え例を必ず示してください\n'
+        '- なぜ直す必要があるのか、その理由も具体的に説明してください\n'
+        '- 改善点を3〜5点挙げてください\n'
+        '- 各改善点について、具体的な修正例を示してください\n'
+        '- 例: 「『資格を取得しました』という表現を、『基本情報技術者試験（FE）の取得に注力しました。3ヶ月間毎日2時間の学習を継続し、無事に合格しました』のように、具体的な資格名、期間、学習時間を加えると説得力が増します」\n'
+        '- 例: 「『力を入れました』を、『チームリーダーとして5名のメンバーをまとめ、週3回のミーティングを開催して進捗管理を行いました』のように、具体的な役割と行動を加えてください」\n'
+        '- 文章表現（ひらがな・漢字）のアドバイスは不要です。面接は話し言葉です\n'
+        '- トータルで5〜8文で説明してください\n\n'
+        '★ suggested_answer（理想的な回答例）の作成ルール:\n'
+        '- ユーザーの回答内容をベースにして、事実を変更せずに改善してください\n'
+        '- 質問の意図に沿った回答になるように構成してください\n'
+        '- 必ず冒頭で結論を一言で述べてください\n'
+        '- 動機や理由、具体的な行動（いつ、どのように、どのくらい）、結果や学びを含めてください\n'
+        '- 具体的な数字（期間、時間、人数、回数など）を必ず入れてください\n'
+        '- 正式名称を使用してください\n'
+        '- 150〜300字で作成してください（短すぎず、長すぎず）\n'
+        '- 面接でそのまま話せる自然な日本語にしてください\n'
+        '- 例: 「学生時代は基本情報技術者試験（FE）の取得に注力しました。ITエンジニアとして働くために必要な基礎知識を身につけたいと考え、3ヶ月間毎日2時間の学習を継続し、無事に合格しました。この経験から、目標に向かって継続的に取り組む力を養うことができました。」\n\n'
         f'質問: {question or "不明"}\n'
         f'回答: {answer or "回答なし"}\n'
         f'深掘り回数: {followup_count}\n'
         f'これまでの対話: {json.dumps(dialogue_history, ensure_ascii=False)}\n'
-        '形式: {"summary":"総評", "strengths":["良い点"], "improvements":["改善点"], "tips":["次の一手"], '
-        '"criteria":[{"id":"deep_followup","status":"good","score":80,"evidence":"引用", "feedback":"コメント"}, '
-        '{"id":"structure","status":"needs_improvement","score":40,"evidence":"引用", "feedback":"コメント"}, '
-        '{"id":"specificity","status":"good","score":80,"evidence":"引用", "feedback":"コメント"}]}'
+        '形式: {"concrete_advice":"具体的な改善提案（必須、回答中の言葉を引用し、言い換え例を示す、5〜8文）", "suggested_answer":"理想的な回答例（必須、150〜300字、数字を含む）"}'
     )
     try:
         res = requests.post(

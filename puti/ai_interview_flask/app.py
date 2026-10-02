@@ -139,6 +139,32 @@ def build_interview_advice(answer, question=''):
     }
 
 
+def analyze_answer_gaps(answer):
+    text = (answer or '').strip()
+    signals = {
+        '動機': any(word in text for word in ('理由', 'きっかけ', 'なぜ', '目指し', '興味')),
+        '本人の行動': any(word in text for word in ('私が', 'わたしが', '担当', '役割', '行動', '工夫', '取り組', '対応')),
+        '具体的な状況': any(word in text for word in ('いつ', 'どこ', '誰', 'チーム', '学校', 'アルバイト', '授業', 'サークル')),
+        '結果': any(word in text for word in ('結果', '成果', '変化', '数字', '増え', '減っ', '達成', '評価')),
+        '学び・活かし方': any(word in text for word in ('学び', '気づ', '活か', '改善', '今後', '入社後')),
+    }
+    return [name for name, present in signals.items() if not present]
+
+
+def answer_focus(answer):
+    text = ' '.join(str(answer or '').split())
+    fragments = [fragment.strip(' 、。.!！?？') for fragment in text.replace('、', '。').split('。')]
+    fragments = [fragment for fragment in fragments if 4 <= len(fragment) <= 28]
+    if not fragments:
+        return 'その経験'
+    focus = max(fragments, key=len)
+    for prefix in ('私は', '私が', '自分は', '自分が', '学生時代に'):
+        if focus.startswith(prefix) and len(focus) > len(prefix) + 3:
+            focus = focus[len(prefix):]
+            break
+    return focus[:24]
+
+
 def normalize_advice_items(value):
     if isinstance(value, list):
         items = value
@@ -179,6 +205,17 @@ def fallback_followup(question, history, followup_count, latest_answer_override=
             if isinstance(turn, dict) and turn.get('role') == 'student':
                 latest_answer = str(turn.get('text', ''))
                 break
+    gaps = analyze_answer_gaps(latest_answer)
+    focus = answer_focus(latest_answer)
+    gap_questions = {
+        '動機': f'「{focus}」に取り組もうと思ったきっかけや理由を教えてください。',
+        '本人の行動': f'「{focus}」の場面で、あなた自身は具体的に何をしましたか？',
+        '具体的な状況': f'「{focus}」は、いつどのような状況で起きたのか教えてください。',
+        '結果': f'「{focus}」への行動によって、結果や周囲にどんな変化がありましたか？',
+        '学び・活かし方': f'「{focus}」の経験から得た学びを、今後どう活かしたいですか？',
+    }
+    if gaps:
+        return gap_questions[gaps[followup_count % len(gaps)]], False
     patterns = [
         (('チーム', '協力', 'メンバー'), [
             'その経験で、チームの中であなたが担った役割を教えてください。',
@@ -271,17 +308,14 @@ def api_interview_reply():
     history = data.get("history") or []  # [{role: 'student'|'interviewer', text: str}, ...]
     followup_count = int(data.get("followup_count", 0))
 
-    if '自己紹介' in question:
-        return jsonify({
-            "reply": "ありがとうございます。よろしくお願いします。それでは、次の質問に移りますね。",
-            "move_on": True,
-        })
-
     convo_text = "\n".join(
         f"{'学生' if t.get('role') == 'student' else '面接官'}: {t.get('text', '')}"
         for t in history
     )
-    latest_answer = next((str(t.get('text', '')).strip() for t in reversed(history) if t.get('role') == 'student'), '')
+    latest_answer = str(data.get('answer') or '').strip()
+    if not latest_answer:
+        latest_answer = next((str(t.get('text', '')).strip() for t in reversed(history) if t.get('role') == 'student'), '')
+    answer_gaps = analyze_answer_gaps(latest_answer)
 
     system_prompt = (
         "あなたは新卒採用の面接官です。就活生と一対一の面接をしています。\n"
@@ -289,7 +323,9 @@ def api_interview_reply():
         f"今回のメインの質問: {question}\n"
         f"学生の直前の回答: {latest_answer or '回答なし'}\n"
         "回答を、主張・理由・本人の行動・工夫・結果・学びの観点で確認してください。"
-        "まだ説明されていない観点を1つだけ選び、回答に出てきた固有の経験や行動に結び付けて深掘りしてください。"
+        f"回答から不足している可能性がある観点: {', '.join(answer_gaps) if answer_gaps else '大きな不足なし'}。"
+        "不足している観点を1つだけ優先し、回答に出てきた固有の経験や行動に結び付けて深掘りしてください。"
+        "回答が自己紹介であっても、経験・役割・強みなど実際に話された内容を根拠にしてください。"
         "直前の質問や、すでに回答された内容をそのまま聞き直してはいけません。"
         "回答にない活動や人物を勝手に追加してはいけません。『リソース』『就活活動』『発言内容』のような抽象的な言い換えは禁止です。"
         "質問には回答中の名詞を少なくとも1つ使い、実際の面接で自然な『具体的に教えてください』『どう対応しましたか』の形にしてください。"

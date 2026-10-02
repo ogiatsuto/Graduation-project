@@ -190,18 +190,6 @@ async function goToCameraCheck() {
     document.getElementById('preview').srcObject = stream;
     updateDeviceStatus();
     state.deviceMonitor = setInterval(updateDeviceStatus, 1000);
-  function selectRandomQuestion() {
-    const randomCheckbox = document.getElementById('randomQuestion');
-    if (!randomCheckbox.checked) {
-      onQCheck();
-      return;
-    }
-    const randomIndex = Math.floor(Math.random() * state.company.questions.length);
-    document.querySelectorAll('#qList input[type="checkbox"]').forEach((input, index) => {
-      input.checked = index === randomIndex;
-    });
-    state.selectedQuestions = [state.company.questions[randomIndex]];
-  }
   } catch (e) {
     document.getElementById('camDot').className = 'dot bad';
     document.getElementById('micDot').className = 'dot bad';
@@ -462,7 +450,7 @@ async function handleAnswer(answerText) {
   state.dialogueHistory.push({ role: 'student', text: answerText });
   document.getElementById('ivQtext').textContent = '回答を確認しています…';
 
-  const turn = await fetchInterviewerReply(answeredQuestionIndex);
+  const turn = await fetchInterviewerReply(answeredQuestionIndex, answerText);
   if (!state.interviewActive) return;
   state.dialogueHistory.push({ role: 'interviewer', text: turn.reply });
   document.getElementById('ivQtext').textContent = turn.reply;
@@ -478,7 +466,7 @@ async function handleAnswer(answerText) {
   });
 }
 
-async function fetchInterviewerReply(questionIndex = state.qIndex) {
+async function fetchInterviewerReply(questionIndex = state.qIndex, latestAnswer = '') {
   const controller = new AbortController();
   state.interviewController = controller;
   const timer = setTimeout(() => controller.abort(), 25000);
@@ -490,6 +478,7 @@ async function fetchInterviewerReply(questionIndex = state.qIndex) {
       body: JSON.stringify({
         question: state.selectedQuestions[questionIndex],
         company: state.company.name,
+        answer: latestAnswer,
         history: state.dialogueHistory,
         followup_count: state.followupCount,
       }),
