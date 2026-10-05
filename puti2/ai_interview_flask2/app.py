@@ -4,6 +4,7 @@ import uuid
 import random
 import datetime
 import re
+import time
 
 import requests
 from flask import Flask, render_template, request, jsonify, url_for
@@ -16,6 +17,18 @@ app = Flask(__name__)
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
 MAX_FOLLOWUPS = 2  # safety cap enforced server-side too
+USE_LLM_ADVICE = False
+
+ADVICE_TEMPLATES = {
+    'strength': '{quote}をもとに、「私の強みは〇〇です」の一文を冒頭に足しましょう。',
+    'episode': '{quote}をもとに、「たとえば〇〇のとき、△△をしました」の形でいつ・何をしたかを足しましょう。',
+    'usage': '「この強みを、入社後は〇〇の場面で活かしたいです」で締めましょう。',
+    'number': '{quote}のあとに、「その結果、〇〇が△△になりました」の形で数字や成果を一つ足しましょう。',
+    'learning': '最後に「この経験から、〇〇と学びました」の形で一文足しましょう。',
+    'detail': '「〇〇のとき、△△で」の形で、いつ・どこで・誰とのうち2つを足しましょう。',
+    'answers_question': '面接官の「{followup_q}」には、最初の一文で「〇〇です」と結論から答え、そのあとに理由や経過を続けましょう。',
+    'concrete': '{quote}のあとに「具体的には〇〇をしました」の形で行動を一つ足しましょう。',
+}
 
 # 深掘り上限に達し、サーバー側で move_on を強制した際に使う締めの相槌。
 # モデルが返した「続きの質問文」をそのまま読み上げると不自然になるための代替。
@@ -94,13 +107,27 @@ LOGS = []
 
 def build_rule_based_criteria(answer):
     text = (answer or '').strip()
-    first_person = bool(re.search(r'(わたし|わたくし|私|僕|ぼく)', text))
+    first_person = bool(re.search(r'(わたし|わたくし|私)', text))
     polite_endings = bool(re.search(r'(です|ます|でした|ました|ません|でしょう|ください)(?:[。！？!?]|$)', text))
     casual_endings = bool(re.search(r'(だよ|だね|じゃん|だろ|だったよ|するよ|したよ)[。！？!?]?\s*$', text))
-    ng_words = ['やばい', 'マジ', 'まじ', 'めっちゃ', '超', 'ウケる', 'ぶっちゃけ', 'とりま', 'えっと', 'えーと', 'あのー', 'なんか', 'そのー', 'まあ', 'バイト', '就活']
-    honorific_words = ['おっしゃられる', 'ご覧になられる', '拝見させていただく', 'させていただかさせて']
+    ng_words = ['やばい', 'まじで', 'めっちゃ', 'ウケる', 'ぶっちゃけ', 'とりま']
+    honorific_words = ['おっしゃられる', 'ご覧になられる', '拝見させていただく']
     found_ng_words = [word for word in ng_words + honorific_words if word in text]
+    if re.search(r'っす(?![ぁ-んァ-ヶ一-龯A-Za-z0-9])', text):
+        found_ng_words.append('っす')
+    if re.search(r'マジで|(?<![ぁ-んァ-ヶ一-龯A-Za-z0-9])マジ(?![ぁ-んァ-ヶ一-龯A-Za-z0-9])', text):
+        found_ng_words.append('マジ')
+    if re.search(r'超(?!える|過)[ぁ-んァ-ヶー]+', text):
+        found_ng_words.append('超')
+    filler_words = ['えっと', 'えーと', 'あのー', 'なんか', 'そのー', 'まあ']
+    found_fillers = [word for word in filler_words if word in text]
     ending_habit = bool(re.search(r'(です|ます|だ|ね|よ)[ー〜～!！]+|[ー〜～]{2,}|[!！?？]{2,}', text))
+    speech_habit = ending_habit
+    speech_evidence = []
+    if ending_habit:
+        speech_evidence.append('語尾の強調・伸ばしとみられる表現があります。')
+    if found_fillers:
+        speech_evidence.append(f'（参考）フィラーを検出: {"、".join(found_fillers)}。判定には使っていません。')
 
     return [
         {
@@ -108,7 +135,7 @@ def build_rule_based_criteria(answer):
             'status': 'good' if first_person and polite_endings and not casual_endings else 'needs_improvement',
             'score': 100 if first_person and polite_endings and not casual_endings else 0,
             'evidence': 'わたし/わたくし系の一人称とです・ます調を確認しました。' if first_person and polite_endings and not casual_endings else 'わたし/わたくし系の一人称、またはです・ます調の統一を確認できませんでした。',
-            'feedback': '一人称を「わたし」または「わたくし」に統一し、文末はです・ます調にそろえましょう。',
+            'feedback': '一人称は「私」「わたし」「わたくし」を使い、文末はです・ます調にそろえましょう',
         },
         {
             'id': 'inappropriate_words', 'label': '不適切な言葉', 'method': 'ルールベース（NGワード照合）',
@@ -118,11 +145,11 @@ def build_rule_based_criteria(answer):
             'feedback': f'回答に「{"」「".join(found_ng_words)}」が含まれています。俗語・略語・つなぎ言葉は避け、正式な表現に言い換えましょう。' if found_ng_words else '面接に適した表現を維持できています。',
         },
         {
-            'id': 'speech_habit', 'label': '言葉癖', 'method': 'ルールベース（Whisperの書き起こし精度に依存）',
-            'status': 'needs_improvement' if ending_habit else 'good',
-            'score': 0 if ending_habit else 100,
-            'evidence': '語尾の強調・伸ばしとみられる表現があります。' if ending_habit else '語尾の強調・伸ばしは検出されませんでした。',
-            'feedback': '語尾を伸ばしたり強調したりせず、文末で一度区切って話しましょう。' if ending_habit else '落ち着いた語尾で話せています。',
+            'id': 'speech_habit', 'label': '言葉癖', 'method': 'ルールベース（語尾の強調・伸ばし。ブラウザ音声認識の精度に依存）',
+            'status': 'needs_improvement' if speech_habit else 'good',
+            'score': 0 if speech_habit else 100,
+            'evidence': ' '.join(speech_evidence) if speech_evidence else 'フィラーや語尾の強調・伸ばしは検出されませんでした。',
+            'feedback': 'フィラーを減らし、語尾を伸ばしたり強調したりせず、文末で一度区切って話しましょう。' if speech_habit else '落ち着いた語尾で話せています。',
         },
     ]
 
@@ -131,53 +158,27 @@ def build_llm_fallback_criteria(followup_count):
     return [
         {
             'id': 'deep_followup', 'label': '深掘り対応', 'method': 'LLM',
-            'status': 'not_applicable' if not followup_count else 'needs_improvement',
-            'score': None if not followup_count else 0,
-            'evidence': 'メイン質問への回答のため、深掘り対応は未評価です。' if not followup_count else 'LLMによる深掘り評価を取得できませんでした。',
+            'status': 'not_applicable' if not followup_count else 'unavailable',
+            'score': None,
+            'evidence': 'メイン質問への回答のため、深掘り対応は未評価です。' if not followup_count else 'LLMの評価を取得できませんでした',
             'feedback': '深掘り質問には、結論を急がず具体的な経験・行動・結果を順に答えましょう。',
+            'missing': [],
         },
         {
             'id': 'structure', 'label': '構成', 'method': 'LLM（3要素の有無と順序）',
-            'status': 'needs_improvement', 'score': 0,
-            'evidence': 'LLMによる構成評価を取得できませんでした。',
+            'status': 'unavailable', 'score': None,
+            'evidence': 'LLMの評価を取得できませんでした',
             'feedback': '強み、具体的なエピソード、その強みの活かし方の順に話しましょう。',
+            'missing': [],
         },
         {
             'id': 'specificity', 'label': '具体性', 'method': 'LLM（該当要素の引用）',
-            'status': 'needs_improvement', 'score': 0,
-            'evidence': 'LLMによる具体性評価を取得できませんでした。',
+            'status': 'unavailable', 'score': None,
+            'evidence': 'LLMの評価を取得できませんでした',
             'feedback': '5W1H、数字、経験から得た学びを具体的に加えましょう。',
+            'missing': [],
         },
     ]
-
-
-def build_interview_advice(answer, question='', followup_count=0):
-    text = (answer or '').strip()
-    
-    # LLMに完全に任せるため、簡易なフォールバックのみ
-    return {
-        'concrete_advice': '回答の内容を詳しく教えていただければ、より具体的なアドバイスを提供できます。',
-        'suggested_answer': text,
-    }
-
-
-def normalize_advice_items(value):
-    if isinstance(value, list):
-        items = value
-    elif isinstance(value, dict):
-        items = [value]
-    elif isinstance(value, str):
-        items = [value]
-    else:
-        items = []
-    normalized = []
-    for item in items:
-        if isinstance(item, dict):
-            item = item.get('value') or item.get('text') or item.get('content') or ''
-        text = str(item).strip()
-        if text and not text.startswith('{') and not text.startswith('['):
-            normalized.append(text.lstrip('-* ').strip())
-    return normalized[:3]
 
 
 def normalize_criteria(value, fallback):
@@ -185,37 +186,47 @@ def normalize_criteria(value, fallback):
     if not isinstance(value, list):
         return normalized
     by_id = {item['id']: item for item in normalized}
+    llm_criteria_ids = {'deep_followup', 'structure', 'specificity'}
     for item in value:
-        if not isinstance(item, dict) or item.get('id') not in by_id:
+        if not isinstance(item, dict) or item.get('id') not in llm_criteria_ids or item.get('id') not in by_id:
             continue
         target = by_id[item['id']]
-        if item['id'] == 'inappropriate_words' and item.get('status') == 'needs_improvement':
-            target['status'] = 'needs_improvement'
-            target['score'] = item.get('score', 0)
-            if item.get('evidence'):
-                target['evidence'] += f' LLM補足: {str(item["evidence"]).strip()}'
-            if item.get('feedback'):
-                target['feedback'] = str(item['feedback']).strip()
-            continue
-        for key in ('status', 'score', 'evidence', 'feedback'):
+        for key in ('status', 'evidence'):
             if key in item and item[key] is not None:
-                target[key] = str(item[key]).strip() if key != 'score' else item[key]
+                target[key] = str(item[key]).strip()
     return normalized
 
 
-def normalize_advice_payload(value, fallback):
-    if not isinstance(value, dict):
-        return fallback
-    summary = value.get('summary') or value.get('総評') or fallback['summary']
-    return {
-        'summary': str(summary).strip(),
-        'strengths': normalize_advice_items(value.get('strengths') or value.get('良い点') or fallback['strengths']),
-        'improvements': normalize_advice_items(value.get('improvements') or value.get('改善点') or fallback['improvements']),
-        'tips': normalize_advice_items(value.get('tips') or value.get('次の一手') or fallback['tips']),
-        'criteria': normalize_criteria(value.get('criteria'), fallback['criteria']),
-        'concrete_advice': str(value.get('concrete_advice') or fallback.get('concrete_advice') or '').strip(),
-        'suggested_answer': str(value.get('suggested_answer') or fallback.get('suggested_answer') or '').strip(),
-    }
+def make_public_criteria(criteria):
+    return [
+        {
+            key: item.get(key, []) if key == 'missing' else item[key]
+            for key in ('id', 'label', 'method', 'status', 'evidence', 'feedback', 'missing')
+        }
+        for item in criteria
+    ]
+
+
+def normalize_for_match(text):
+    return re.sub(r'[\s、。！？!?.,，．・「」『』（）()【】\[\]{}]', '', str(text or ''))
+
+
+def evidence_exists(evidence, student_text):
+    normalized_evidence = normalize_for_match(evidence)
+    normalized_student_text = normalize_for_match(student_text)
+    return bool(normalized_evidence) and normalized_evidence in normalized_student_text
+
+
+def has_forbidden_advice_content(advice, student_text):
+    normalized_advice = str(advice or '').translate(str.maketrans('０１２３４５６７８９', '0123456789'))
+    normalized_student_text = str(student_text or '').translate(str.maketrans('０１２３４５６７８９', '0123456789'))
+    normalized_advice = re.sub(r'5w1h', '', normalized_advice, flags=re.IGNORECASE)
+    advice_numbers = re.findall(r'\d+(?:\.\d+)?', normalized_advice)
+    student_numbers = set(re.findall(r'\d+(?:\.\d+)?', normalized_student_text))
+    missing_numbers = [number for number in advice_numbers if number not in student_numbers]
+    forbidden_words = ('厳しい', '通らない', '不合格', '落ち', '難しいでしょう')
+    found_forbidden = [word for word in forbidden_words if word in normalized_advice]
+    return missing_numbers, found_forbidden
 
 
 def analyze_answer_gaps(answer):
@@ -440,83 +451,278 @@ def api_interview_reply():
 @app.route("/api/interview-advice", methods=["POST"])
 def api_interview_advice():
     data = request.get_json(force=True) or {}
-    answer = str(data.get('answer', '')).strip()
     question = str(data.get('question', '')).strip()
-    try:
-        followup_count = max(0, int(data.get('followup_count', 0)))
-    except (TypeError, ValueError):
-        followup_count = 0
-    dialogue_history = data.get('dialogue_history') or []
-    fallback = build_interview_advice(answer, question, followup_count)
-    
-    # ルールベースの評価結果を取得
-    rule_based_criteria = build_rule_based_criteria(answer)
-    llm_fallback_criteria = build_llm_fallback_criteria(followup_count)
-    
-    # ルールベース評価結果を文字列化してプロンプトに渡す
-    criteria_text = '\n'.join([
-        f"- {c['label']}: {c['status']} (スコア: {c['score']}) | 根拠: {c['evidence']} | フィードバック: {c['feedback']}"
-        for c in rule_based_criteria + llm_fallback_criteria
-    ])
-    
-    prompt = (
-        'あなたは就職面接の専門コーチです。候補者の1回答を分析し、具体的な改善提案と理想的な回答例を作成してください。\n'
-        '回答内容に基づいて、抽象的なアドバイスではなく、必ず回答中の具体的な言葉を引用してアドバイスを作成してください。\n\n'
-        '【評価基準の結果】\n'
-        f'{criteria_text}\n\n'
-        '【最重要ルール】\n'
-        'concrete_adviceとsuggested_answerは必ず入力してください。空欄にしないでください。\n\n'
-        '★ concrete_advice（具体的な改善提案）の作成ルール:\n'
-        '- 回答中の具体的な言葉やフレーズを必ず引用してください\n'
-        '- 「こう直してください」という具体的な言い換え例を必ず示してください\n'
-        '- なぜ直す必要があるのか、その理由も具体的に説明してください\n'
-        '- 改善点を3〜5点挙げてください\n'
-        '- 各改善点について、具体的な修正例を示してください\n'
-        '- 例: 「『資格を取得しました』という表現を、『基本情報技術者試験（FE）の取得に注力しました。3ヶ月間毎日2時間の学習を継続し、無事に合格しました』のように、具体的な資格名、期間、学習時間を加えると説得力が増します」\n'
-        '- 例: 「『力を入れました』を、『チームリーダーとして5名のメンバーをまとめ、週3回のミーティングを開催して進捗管理を行いました』のように、具体的な役割と行動を加えてください」\n'
-        '- 文章表現（ひらがな・漢字）のアドバイスは不要です。面接は話し言葉です\n'
-        '- トータルで5〜8文で説明してください\n\n'
-        '★ suggested_answer（理想的な回答例）の作成ルール:\n'
-        '- ユーザーの回答内容をベースにして、事実を変更せずに改善してください\n'
-        '- 質問の意図に沿った回答になるように構成してください\n'
-        '- 必ず冒頭で結論を一言で述べてください\n'
-        '- 動機や理由、具体的な行動（いつ、どのように、どのくらい）、結果や学びを含めてください\n'
-        '- 具体的な数字（期間、時間、人数、回数など）を必ず入れてください\n'
-        '- 正式名称を使用してください\n'
-        '- 150〜300字で作成してください（短すぎず、長すぎず）\n'
-        '- 面接でそのまま話せる自然な日本語にしてください\n'
-        '- 例: 「学生時代は基本情報技術者試験（FE）の取得に注力しました。ITエンジニアとして働くために必要な基礎知識を身につけたいと考え、3ヶ月間毎日2時間の学習を継続し、無事に合格しました。この経験から、目標に向かって継続的に取り組む力を養うことができました。」\n\n'
-        f'質問: {question or "不明"}\n'
-        f'回答: {answer or "回答なし"}\n'
-        f'深掘り回数: {followup_count}\n'
-        f'これまでの対話: {json.dumps(dialogue_history, ensure_ascii=False)}\n'
-        '形式: {"concrete_advice":"具体的な改善提案（必須、回答中の言葉を引用し、言い換え例を示す、5〜8文）", "suggested_answer":"理想的な回答例（必須、150〜300字、数字を含む）"}'
-    )
-    try:
-        res = requests.post(
-            f"{OLLAMA_HOST}/api/chat",
-            json={
-                'model': OLLAMA_MODEL,
-                'format': 'json',
-                'stream': False,
-                'messages': [
-                    {'role': 'system', 'content': prompt},
-                    {'role': 'user', 'content': '回答に登場する具体的な言葉を使って、JSONのみで分析してください。'},
-                ],
-                'options': {'temperature': 0.45},
-            },
-            timeout=30,
+    dialogue = data.get('dialogue') or []
+    students = [item for item in dialogue if isinstance(item, dict) and item.get('role') == 'student']
+    student_text = '\n'.join(str(item.get('text', '')).strip() for item in students).strip()
+    main_answer = str(students[0].get('text', '')).strip() if students else ''
+    followup_count = max(0, len(students) - 1)
+    followup_pairs = []
+    for index in range(1, len(dialogue) - 1, 2):
+        interviewer = dialogue[index]
+        student = dialogue[index + 1]
+        if (isinstance(interviewer, dict) and interviewer.get('role') == 'interviewer'
+                and isinstance(student, dict) and student.get('role') == 'student'):
+            followup_pairs.append({
+                'question': str(interviewer.get('text', '')).strip(),
+                'answer': str(student.get('text', '')).strip(),
+            })
+
+    rule_criteria = build_rule_based_criteria(student_text)
+    llm_criteria = build_llm_fallback_criteria(followup_count)
+    by_id = {item['id']: item for item in rule_criteria + llm_criteria}
+    checks = {'rejected': [], 'raw_judge': '', 'raw_advice': '', 'rejected_advice': ''}
+    timing = {'judge_sec': 0.0, 'advice_sec': 0.0}
+    allowed_statuses = {'good', 'needs_improvement', 'not_applicable', 'unavailable'}
+    structure_applicable = any(word in question for word in ('力を入れ', '強み', '成長'))
+    if not structure_applicable:
+        by_id['structure']['status'] = 'not_applicable'
+        by_id['structure']['evidence'] = '質問が構成評価の対象ではありません。'
+
+    judge_specs = {}
+    if structure_applicable:
+        judge_specs.update({
+            'strength': ('強み', '学生が自分の強み（長所・得意なこと）を述べている', main_answer, question),
+            'episode': ('エピソード', 'その強みや取り組みを裏付ける、具体的な出来事・行動を述べている', main_answer, question),
+        })
+    judge_specs.update({
+        'detail': ('具体的な状況', 'いつ・どこで・誰と・何を・なぜ・どのようにのうち2つ以上を述べている', main_answer, question),
+    })
+    if followup_count:
+        pair = followup_pairs[-1]
+        judge_specs.update({
+            'answers_question': ('質問への直接の回答', '回答が、上の質問に直接答えている', pair['answer'], pair['question']),
+            'concrete': ('具体的な行動・事実', '回答が、具体的な行動・事実・数字のいずれかを含んでいる', '\n'.join(item['answer'] for item in followup_pairs), pair['question']),
+        })
+    raw_judge = {}
+    judge_each = {}
+    judge_results = {}
+    for key, (label, criterion, target_text, q) in judge_specs.items():
+        judge_start = time.time()
+        raw_output = ''
+        try:
+            judge_prompt = (
+                'あなたは面接回答の評価者です。\n'
+                f'質問: {q}\n'
+                f'対象の発言: {target_text}\n'
+                f'判定基準: {criterion}\n'
+                '回答に書かれていることだけで判断する。推測しない。迷ったらfalse。'
+                'quoteは発言からそのまま引用し、30字以内にする。foundがfalseならquoteは空文字にする。\n'
+                '出力は必ずJSONのみ: {"found": true または false, "quote": "発言からそのまま引用"}'
+            )
+            response = requests.post(
+                f'{OLLAMA_HOST}/api/chat',
+                json={
+                    'model': OLLAMA_MODEL,
+                    'format': 'json',
+                    'stream': False,
+                    'messages': [
+                        {'role': 'system', 'content': judge_prompt},
+                        {'role': 'user', 'content': 'JSONのみで答えてください。'},
+                    ],
+                    'options': {'temperature': 0, 'seed': 42, 'num_predict': 80},
+                    'keep_alive': '10m',
+                },
+                timeout=180,
+            )
+            response.raise_for_status()
+            raw_output = str(response.json()['message']['content']).strip().strip('`').strip()
+            raw_judge[key] = raw_output
+            if raw_output.lower().startswith('json'):
+                raw_output = raw_output[4:].strip()
+            parsed = json.loads(raw_output)
+            found = parsed.get('found') if isinstance(parsed, dict) else None
+            quote = str(parsed.get('quote', '')).strip()[:30] if isinstance(parsed, dict) else ''
+            if not isinstance(found, bool):
+                judge_results[key] = None
+                checks['rejected'].append(f'{key}: 判定を読み取れません')
+                continue
+            if found and not evidence_exists(quote, target_text):
+                found = False
+                checks['rejected'].append(f'{key}: 引用が発言に存在しません')
+            judge_results[key] = (found, quote if found else '')
+        except (OSError, ValueError, KeyError, TypeError, requests.RequestException) as error:
+            raw_judge[key] = raw_output
+            judge_results[key] = None
+            checks['rejected'].append(f'{key}: 判定を読み取れません')
+            app.logger.warning('interview judge generation failed for %s: %s | raw model output: %r', key, error, raw_output)
+        judge_each[key] = round(time.time() - judge_start, 3)
+        app.logger.info('interview advice judge[%s] elapsed: %.3f sec', key, judge_each[key])
+
+    number_pattern = re.compile(r'(?:[0-9０-９一二三四五六七八九十百千万億]+(?:年|か月|ヶ月|カ月|時間|分|回|周|人|点|%|％|割|日|週|件|問|倍|冊|社)|合格|達成|向上|増え|減っ|受賞|優勝|完成|改善)')
+    number_match = number_pattern.search(main_answer)
+    judge_results['number'] = (bool(number_match), number_match.group()[:30] if number_match else '')
+    raw_judge['number'] = number_match.group() if number_match else ''
+    judge_each['number'] = 0.0
+    app.logger.info('interview advice judge[%s] elapsed: %.3f sec', 'number', judge_each['number'])
+    learning_pattern = re.compile(r'(学びました|学んだ|学べ|気づ[きいけ]|分かりました|わかりました|実感|身につ|成長)')
+    usage_pattern = re.compile(r'(仕事|入社後|今後|将来|貴社|御社|業務).{0,30}(活か|生か|役立|つなげ|成長|取り組)')
+    learning_match = learning_pattern.search(main_answer)
+    usage_match = usage_pattern.search(main_answer)
+    judge_results['learning'] = (bool(learning_match), learning_match.group()[:30] if learning_match else '')
+    judge_results['usage'] = (bool(usage_match), usage_match.group()[:30] if usage_match else '')
+    raw_judge['learning'] = learning_match.group() if learning_match else ''
+    raw_judge['usage'] = usage_match.group() if usage_match else ''
+    judge_each['learning'] = 0.0
+    judge_each['usage'] = 0.0
+    app.logger.info('interview advice judge[%s] elapsed: %.3f sec', 'learning', judge_each['learning'])
+    app.logger.info('interview advice judge[%s] elapsed: %.3f sec', 'usage', judge_each['usage'])
+    checks['raw_judge'] = raw_judge
+    timing['judge_each'] = judge_each
+    timing['judge_sec'] = round(sum(judge_each.values()), 3)
+
+    missing_labels = {
+        'strength': '強み', 'episode': 'エピソード', 'usage': '活かし方',
+        'number': '数字・成果', 'learning': '学び', 'detail': '具体的な状況',
+        'answers_question': '質問への直接の回答', 'concrete': '具体的な行動・事実',
+    }
+    def set_llm_criterion(item_id, keys):
+        criterion = by_id[item_id]
+        results = [judge_results.get(key) for key in keys]
+        false_keys = [key for key, result in zip(keys, results) if result is not None and not result[0]]
+        none_exists = any(result is None for result in results)
+        quotes = list(dict.fromkeys(result[1] for result in results if result is not None and result[0] and result[1]))
+        criterion['status'] = 'needs_improvement' if false_keys else 'unavailable' if none_exists else 'good'
+        criterion['evidence'] = '、'.join(quotes) if quotes else '該当する発言が見つかりませんでした。'
+        criterion['missing'] = [missing_labels[key] for key in false_keys]
+    if structure_applicable:
+        set_llm_criterion('structure', ('strength', 'episode', 'usage'))
+    set_llm_criterion('specificity', ('number', 'learning', 'detail'))
+    if followup_count:
+        set_llm_criterion('deep_followup', ('answers_question', 'concrete'))
+    judge_success = any(judge_results.get(key) is not None for key in judge_specs)
+
+    needs_improvement = [item for item in by_id.values() if item['status'] == 'needs_improvement']
+    if len(needs_improvement) >= 3:
+        priority = {'deep_followup': 0, 'structure': 1, 'specificity': 2}
+        advice_items = sorted(
+            needs_improvement,
+            key=lambda item: (priority.get(item['id'], 3), list(by_id).index(item['id'])),
+        )[:2]
+    else:
+        advice_items = needs_improvement
+    advice = '質問に沿って、具体的に答えられています。'
+    advice_from = [
+        {'id': item['id'], 'label': item['label'], 'missing': item.get('missing', [])}
+        for item in advice_items
+    ]
+    advice_success = True
+    raw_advice = ''
+    advice_start = time.time()
+    if needs_improvement and not USE_LLM_ADVICE:
+        missing_label_to_key = {label: key for key, label in missing_labels.items()}
+        advice_sentences = []
+        good_llm_ids = {'structure', 'specificity', 'deep_followup'}
+        main_quote = ''
+        for item in by_id.values():
+            if item['id'] not in good_llm_ids or item['status'] != 'good':
+                continue
+            evidence = str(item.get('evidence', '')).strip()[:20]
+            if evidence and evidence_exists(evidence, student_text):
+                main_quote = evidence
+                break
+        if not main_quote:
+            main_quote = main_answer.split('。', 1)[0].strip()[:20]
+            if not evidence_exists(main_quote, student_text):
+                main_quote = ''
+        followup_q = followup_pairs[-1]['question'] if followup_pairs else ''
+        followup_answer = followup_pairs[-1]['answer'] if followup_pairs else ''
+        followup_quote = followup_answer.split('。', 1)[0].strip()[:20]
+        if not evidence_exists(followup_quote, student_text):
+            followup_quote = ''
+        for item in advice_items:
+            if item['id'] not in {'first_person_ending', 'inappropriate_words', 'speech_habit'}:
+                keys = [missing_label_to_key[label] for label in item.get('missing', []) if label in missing_label_to_key]
+                key = next((key for key in keys if key in ADVICE_TEMPLATES), '')
+                if not key:
+                    continue
+                quote = followup_quote if key == 'concrete' else main_quote
+                sentence = ADVICE_TEMPLATES[key].format(quote=quote, followup_q=followup_q)
+                if not quote and key in {'number', 'concrete'}:
+                    sentence = sentence.replace('のあとに', '').replace('。', '。', 1)
+            else:
+                sentence = item['feedback']
+            if sentence and sentence not in advice_sentences:
+                advice_sentences.append(sentence)
+        advice = '。'.join(sentence.rstrip('。') for sentence in advice_sentences[:3]) + '。' if advice_sentences else advice
+    elif needs_improvement and USE_LLM_ADVICE:
+        feedback_lines = []
+        for item in advice_items:
+            if item['id'] in {'deep_followup', 'structure', 'specificity'}:
+                evidence = item.get('evidence', '')
+                feedback_lines.append(f"- {item['label']}: 引用「{evidence}」、欠けている要素: {'、'.join(item.get('missing', []))}")
+            else:
+                feedback_lines.append(f"- {item['label']}: {item['feedback']}")
+        feedback_text = '\n'.join(feedback_lines)
+        advice_prompt = (
+            'あなたは就職面接のアドバイザーです。質問ごとのアドバイスを2〜3文で作成してください。\n'
+            f'質問: {question}\nこの質問への助言であり、自己紹介ではありません。\n改善項目:\n{feedback_text}\n'
+            '学生の発言に出てきた言葉だけを使い、数字・資格名・人名・経験を追加しないでください。'
+            '「合格は厳しい」「通らない」などの評価・断定をせず、学生の発言を引用して何を足すと伝わりやすいかを書いてください。'
+            '質問の言い換えだけを助言にしないでください。出力はJSONのみ: {"advice":"2〜3文のアドバイス"}'
         )
-        res.raise_for_status()
-        raw = str(res.json()['message']['content']).strip().strip('`').strip()
-        if raw.lower().startswith('json'):
-            raw = raw[4:].strip()
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict) and parsed.get('summary'):
-            return jsonify(normalize_advice_payload(parsed, fallback))
-    except (OSError, ValueError, KeyError, TypeError, requests.RequestException) as error:
-        app.logger.warning('interview advice generation failed: %s', error)
-    return jsonify(fallback)
+        advice_start = time.time()
+        try:
+            response = requests.post(
+                f'{OLLAMA_HOST}/api/chat',
+                json={
+                    'model': OLLAMA_MODEL,
+                    'format': 'json',
+                    'stream': False,
+                    'messages': [
+                        {'role': 'system', 'content': advice_prompt},
+                        {'role': 'user', 'content': 'JSONのみでアドバイスを作成してください。'},
+                    ],
+                    'options': {'temperature': 0, 'seed': 42, 'num_predict': 120},
+                    'keep_alive': '10m',
+                },
+                timeout=180,
+            )
+            response.raise_for_status()
+            raw_advice = str(response.json()['message']['content']).strip().strip('`').strip()
+            checks['raw_advice'] = raw_advice
+            if raw_advice.lower().startswith('json'):
+                raw_advice = raw_advice[4:].strip()
+            parsed_advice = json.loads(raw_advice)
+            if not isinstance(parsed_advice, dict) or 'advice' not in parsed_advice:
+                raise ValueError('advice is missing from advice response')
+            advice = str(parsed_advice.get('advice', '')).strip()
+            missing_numbers, forbidden_words = has_forbidden_advice_content(advice, student_text)
+            quoted_advice = re.findall(r'『([^』]*)』', advice)
+            missing_quote = any(not evidence_exists(quote, student_text) for quote in quoted_advice)
+            if not advice or missing_numbers or forbidden_words or missing_quote:
+                advice_success = False
+                checks['rejected_advice'] = advice
+                reasons = []
+                if not advice:
+                    reasons.append('adviceが空です')
+                if missing_numbers:
+                    reasons.append('学生の発言にない数字を含みます')
+                if forbidden_words:
+                    reasons.append(f'禁止語を含みます: {"、".join(forbidden_words)}')
+                if missing_quote:
+                    reasons.append('引用が発言に存在しません')
+                checks['rejected'].extend(reasons)
+                app.logger.warning('interview advice response rejected; raw model output: %r', raw_advice)
+        except (OSError, ValueError, KeyError, TypeError, requests.RequestException) as error:
+            advice_success = False
+            app.logger.warning('interview advice generation failed: %s | raw model output: %r', error, raw_advice)
+        timing['advice_sec'] = round(time.time() - advice_start, 3)
+        app.logger.info('interview advice advice elapsed: %.3f sec', timing['advice_sec'])
+        if not advice_success:
+            advice = '。'.join(item['feedback'].rstrip('。') for item in advice_items[:2]) + '。'
+    timing['advice_sec'] = round(time.time() - advice_start, 3)
+    if not USE_LLM_ADVICE:
+        app.logger.info('interview advice template elapsed: %.3f sec', timing['advice_sec'])
+    source = 'fallback' if not judge_success else 'llm' if advice_success and not checks['rejected'] else 'partial'
+    return jsonify({
+        'source': source,
+        'criteria': make_public_criteria(list(by_id.values())),
+        'advice': advice,
+        'advice_from': advice_from,
+        'timing': timing,
+        'checks': checks,
+    })
 
 
 @app.route("/api/logs", methods=["POST"])

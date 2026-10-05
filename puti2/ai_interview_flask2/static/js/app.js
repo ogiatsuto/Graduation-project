@@ -4,6 +4,7 @@ let state = {
   company: null, mode: 'all', selectedQuestions: [],
   stream: null, mediaRecorder: null, chunks: [],
   qIndex: 0, followupCount: 0, dialogueHistory: [], recognition: null,
+  questionRecords: [],
   interviewActive: false, interviewController: null,
   deviceMonitor: null, // カメラ/マイクの生存状態を1秒ごとに監視するタイマーID
   adviceHistory: loadAdviceHistory(),
@@ -30,6 +31,10 @@ function loadAdviceHistory() {
 
 function saveAdviceHistory() {
   localStorage.setItem(adviceHistoryKey, JSON.stringify(state.adviceHistory.slice(0, 100)));
+}
+
+function isDebugMode() {
+  return new URLSearchParams(window.location.search).get('debug') === '1';
 }
 
 function escapeAdviceText(value) {
@@ -224,7 +229,7 @@ function speechRecognitionSupported() {
   return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
 
-async function requestAdvice(answer, question) {
+async function requestAdvice(record) {
   const controller = new AbortController();
   state.interviewController = controller;
   try {
@@ -233,23 +238,20 @@ async function requestAdvice(answer, question) {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
-        answer,
-        question,
-        followup_count: state.followupCount,
-        dialogue_history: state.dialogueHistory,
+        question: record.question,
+        dialogue: record.dialogue,
       }),
     });
     if (!response.ok) throw new Error('advice request failed');
     return await response.json();
   } catch (e) {
     return {
-      summary: '回答を確認しました。具体的な行動と結果をセットで伝えると、さらに説得力が増します。',
-      strengths: ['自分の言葉で経験を説明しようとしています。'],
-      improvements: ['「自分が何をしたか」を一つ具体的に説明しましょう。'],
-      tips: ['結論・行動・結果・学びの順に整理して話しましょう。'],
+      source: 'fallback',
       criteria: [],
-      concrete_advice: '',
-      suggested_answer: '',
+      advice: '作成できませんでした。',
+      advice_from: [],
+      timing: { judge_sec: 0, advice_sec: 0 },
+      checks: { rejected: [] },
     };
   } finally {
     if (state.interviewController === controller) state.interviewController = null;
@@ -263,38 +265,24 @@ function renderAdviceHistory() {
   empty.classList.toggle('hidden', state.adviceHistory.length > 0);
   list.innerHTML = state.adviceHistory.slice().reverse().map((entry, index) => {
     const advice = entry.advice || {};
-    const summary = adviceItemText(advice.summary || '回答を確認しました。');
-    const statusLabels = { good: 'できています', needs_improvement: '改善が必要です', not_applicable: '今回は対象外です' };
-    const criteriaFeedback = (advice.criteria || []).map(item => {
-      const label = item.label || '評価項目';
-      const status = statusLabels[item.status] || '確認が必要です';
-      const evidence = adviceItemText(item.evidence);
-      const feedback = item.status === 'needs_improvement' ? adviceItemText(item.feedback) : '';
-      return `${label}は${status}。${evidence}${feedback ? ` ${feedback}` : ''}`;
-    });
-    const fallbackFeedback = [
-      ...(advice.improvements || []).map(item => adviceItemText(item)),
-      ...(advice.tips || []).map(item => adviceItemText(item)),
-    ];
-    const combinedAdvice = [summary, ...(criteriaFeedback.length ? criteriaFeedback : fallbackFeedback)]
-      .filter(Boolean)
-      .join(' ');
-    const concreteAdvice = adviceItemText(advice.concrete_advice);
-    const suggestedAnswer = adviceItemText(advice.suggested_answer);
-    
-    let adviceSections = '';
-    if (concreteAdvice) {
-      adviceSections += `<div class="concrete-advice-section"><h4>📝 具体的な改善提案</h4><p>${escapeAdviceText(concreteAdvice)}</p></div>`;
-    }
-    if (suggestedAnswer) {
-      adviceSections += `<div class="suggested-answer-section"><h4>💡 理想的な回答例</h4><p class="suggested-answer-text">${escapeAdviceText(suggestedAnswer)}</p></div>`;
+    const statusLabels = { good: 'はい', needs_improvement: 'いいえ', not_applicable: '対象外', unavailable: '判定不可' };
+    let debugSections = '';
+    if (isDebugMode()) {
+      const source = advice.source || '不明';
+      const criteria = (advice.criteria || []).map(item => `<div class="criteria-item ${escapeAdviceText(item.status || '')}">
+        <div class="criteria-heading"><span>${escapeAdviceText(item.label || item.id || '評価項目')}</span><span>${escapeAdviceText(statusLabels[item.status] || '不明')}</span></div>
+        <p><small>根拠:</small> ${escapeAdviceText(item.evidence || '')}${item.missing && item.missing.length ? ` <small>不足:</small> ${escapeAdviceText(item.missing.join('、'))}` : ''}</p>
+      </div>`).join('');
+      const adviceFrom = (advice.advice_from || []).map(item => escapeAdviceText(item.label || item.id)).join('、');
+      const timing = advice.timing || {};
+      debugSections = `<div class="criteria-list"><h4>デバッグ表示</h4><p>source: ${escapeAdviceText(source)}</p>${criteria}${adviceFrom ? `<p>アドバイスの根拠: ${adviceFrom}</p>` : ''}<p>judge: ${escapeAdviceText(timing.judge_sec)}秒 / advice: ${escapeAdviceText(timing.advice_sec)}秒</p></div>`;
     }
     
     return `<article class="advice-history-card">
       <div class="advice-history-meta"><strong>${escapeAdviceText(entry.company)}</strong><span>${escapeAdviceText(entry.created_at)} ・ ${entry.followup_count ? `深掘り ${entry.followup_count}回目` : 'メイン質問'}</span></div>
       <h3>${escapeAdviceText(entry.question)}</h3>
-      <p class="advice-answer">${escapeAdviceText(entry.answer)}</p>
-      ${adviceSections}
+      <p class="advice-answer">${escapeAdviceText(advice.advice || '作成できませんでした。')}</p>
+      ${debugSections}
     </article>`;
   }).join('');
 }
@@ -303,6 +291,7 @@ function renderAdviceHistory() {
 function startInterview() {
   stopDeviceMonitor(); // カメラ確認画面用の監視はここで停止する
   state.interviewActive = true;
+  state.questionRecords = [];
   document.getElementById('answerBox').classList.add('hidden');
   document.getElementById('fallbackBox').classList.add('hidden');
   document.getElementById('recIndicator').classList.add('hidden');
@@ -330,6 +319,7 @@ function askQuestion(i, endReason = '') {
   state.followupCount = 0;
   state.dialogueHistory = [];
   const q = state.selectedQuestions[i];
+  state.questionRecords[i] = { question: q, dialogue: [] };
   document.getElementById('ivProgress').textContent = `質問 ${i + 1} / ${state.selectedQuestions.length}`;
   document.getElementById('ivQtext').textContent = q;
   document.getElementById('answerBox').classList.add('hidden');
@@ -484,18 +474,8 @@ async function handleAnswer(answerText) {
   if (!state.interviewActive) return;
   if (!answerText) answerText = '（発言を聞き取れませんでした）';
   const answeredQuestionIndex = state.qIndex;
-  const currentQuestion = document.getElementById('ivQtext').textContent;
-  const advice = await requestAdvice(answerText, currentQuestion);
-  state.adviceHistory.push({
-    company: state.company.name,
-    question: currentQuestion,
-    answer: answerText,
-    followup_count: state.followupCount,
-    advice,
-    created_at: new Date().toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' }),
-  });
-  saveAdviceHistory();
-  if (!state.interviewActive) return;
+  const questionRecord = state.questionRecords[answeredQuestionIndex];
+  questionRecord.dialogue.push({ role: 'student', text: answerText });
   state.dialogueHistory.push({ role: 'student', text: answerText });
   document.getElementById('ivQtext').textContent = '回答を確認しています…';
 
@@ -507,6 +487,9 @@ async function handleAnswer(answerText) {
   speakOnce(turn.reply, () => {
     if (!state.interviewActive) return;
     const followupLimitReached = !turn.move_on && state.followupCount + 1 >= MAX_FOLLOWUPS;
+    if (!turn.move_on && !followupLimitReached) {
+      questionRecord.dialogue.push({ role: 'interviewer', text: turn.reply });
+    }
     if (turn.move_on || followupLimitReached) {
       askQuestion(answeredQuestionIndex + 1, followupLimitReached ? '深掘り質問が2回に達したため、以上で面接を終了します。' : '');
     } else {
@@ -514,6 +497,27 @@ async function handleAnswer(answerText) {
       listenForAnswer();
     }
   });
+}
+
+async function generateAdviceForInterview() {
+  const total = state.questionRecords.length;
+  const intro = document.querySelector('.advice-history-intro');
+  for (let index = 0; index < total; index++) {
+    if (intro) intro.textContent = `アドバイスを作成中 ${index + 1}/${total}`;
+    const record = state.questionRecords[index];
+    const advice = await requestAdvice(record);
+    state.adviceHistory.push({
+      company: state.company.name,
+      question: record.question,
+      dialogue: record.dialogue,
+      followup_count: Math.max(0, record.dialogue.filter(item => item.role === 'student').length - 1),
+      advice,
+      created_at: new Date().toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' }),
+    });
+    saveAdviceHistory();
+    renderAdviceHistory();
+  }
+  if (intro) intro.textContent = '面接中の回答と、深掘り質問への回答を質問ごとに振り返れます。';
 }
 
 async function fetchInterviewerReply(questionIndex = state.qIndex) {
@@ -544,7 +548,7 @@ async function fetchInterviewerReply(questionIndex = state.qIndex) {
   }
 }
 
-function endInterview(aborted, endReason = '') {
+async function endInterview(aborted, endReason = '') {
   state.interviewActive = false;
   if (state.interviewController) {
     state.interviewController.abort();
@@ -563,8 +567,9 @@ function endInterview(aborted, endReason = '') {
   document.getElementById('preview').srcObject = null;
   document.getElementById('interview').style.display = 'none';
   if (!aborted) {
-    alert(endReason || 'お疲れ様でした。以上で面接を終了します。質問ごとのアドバイスを確認できます。');
     showScreen('advice');
+    await generateAdviceForInterview();
+    alert(endReason || 'お疲れ様でした。以上で面接を終了します。質問ごとのアドバイスを確認できます。');
   } else {
     showScreen('history');
   }
