@@ -30,6 +30,17 @@ ADVICE_TEMPLATES = {
     'concrete': '{quote}のあとに「具体的には〇〇をしました」の形で行動を一つ足しましょう。',
 }
 
+ADVICE_EXAMPLES = {
+    'strength': '私の強みは、最後までやり抜くことです。',
+    'episode': 'たとえば、チーム開発で画面が遅いとき、原因を調べて処理をまとめ直しました。',
+    'usage': 'この強みを、入社後はお客様の要望を整理する場面で活かしたいです。',
+    'number': 'その結果、作業時間が半分になりました。',
+    'learning': 'この経験から、確認しながら進める大切さを学びました。',
+    'detail': '先月、チームの4人で、授業の課題としてWebサイトを作りました。',
+    'answers_question': '一番工夫したのは、見直しの方法です。',
+    'concrete': '具体的には、毎週1回、間違えた箇所を一覧にして見直しました。',
+}
+
 # 深掘り上限に達し、サーバー側で move_on を強制した際に使う締めの相槌。
 # モデルが返した「続きの質問文」をそのまま読み上げると不自然になるための代替。
 CLOSING_ACKNOWLEDGEMENTS = [
@@ -608,43 +619,90 @@ def api_interview_advice():
     ]
     advice_success = True
     raw_advice = ''
+    advice_blocks = []
     advice_start = time.time()
     if needs_improvement and not USE_LLM_ADVICE:
         missing_label_to_key = {label: key for key, label in missing_labels.items()}
         advice_sentences = []
         good_llm_ids = {'structure', 'specificity', 'deep_followup'}
+        def trim_quote(text):
+            text = str(text or '').strip()
+            boundary = re.search(r'[、。]', text)
+            if boundary:
+                text = text[:boundary.end()]
+            if len(text) > 25:
+                comma_index = text.rfind('、', 0, 25)
+                text = text[:comma_index + 1] if comma_index >= 0 else text[:25]
+            return text
+
         main_quote = ''
         for item in by_id.values():
             if item['id'] not in good_llm_ids or item['status'] != 'good':
                 continue
-            evidence = str(item.get('evidence', '')).strip()[:20]
+            evidence = trim_quote(item.get('evidence', ''))
             if evidence and evidence_exists(evidence, student_text):
                 main_quote = evidence
                 break
         if not main_quote:
-            main_quote = main_answer.split('。', 1)[0].strip()[:20]
+            main_quote = trim_quote(main_answer)
             if not evidence_exists(main_quote, student_text):
                 main_quote = ''
         followup_q = followup_pairs[-1]['question'] if followup_pairs else ''
         followup_answer = followup_pairs[-1]['answer'] if followup_pairs else ''
-        followup_quote = followup_answer.split('。', 1)[0].strip()[:20]
+        followup_quote = trim_quote(followup_answer)
         if not evidence_exists(followup_quote, student_text):
             followup_quote = ''
+        rule_based_ids = {'first_person_ending', 'inappropriate_words', 'speech_habit'}
+        used_examples = set()
         for item in advice_items:
-            if item['id'] not in {'first_person_ending', 'inappropriate_words', 'speech_habit'}:
+            example = ''
+            if item['id'] not in rule_based_ids:
                 keys = [missing_label_to_key[label] for label in item.get('missing', []) if label in missing_label_to_key]
                 key = next((key for key in keys if key in ADVICE_TEMPLATES), '')
                 if not key:
                     continue
                 quote = followup_quote if key == 'concrete' else main_quote
                 sentence = ADVICE_TEMPLATES[key].format(quote=quote, followup_q=followup_q)
-                if not quote and key in {'number', 'concrete'}:
-                    sentence = sentence.replace('のあとに', '').replace('。', '。', 1)
+                for prefix in (f'{quote}をもとに、', f'{quote}のあとに、'):
+                    if prefix:
+                        sentence = sentence.replace(prefix, '', 1)
+                if not quote:
+                    sentence = sentence.replace('をもとに、', '', 1).replace('のあとに、', '', 1)
+                example = ADVICE_EXAMPLES.get(key, '')
+                if example in used_examples:
+                    example = ''
+                elif example:
+                    used_examples.add(example)
             else:
                 sentence = item['feedback']
+                if item['id'] == 'inappropriate_words':
+                    evidence = str(item.get('evidence', ''))
+                    target = evidence.split('確認された語句: ', 1)[1] if '確認された語句: ' in evidence else ''
+                else:
+                    target = ''
+                quote = target if target and evidence_exists(target, student_text) else ''
             if sentence and sentence not in advice_sentences:
                 advice_sentences.append(sentence)
-        advice = '。'.join(sentence.rstrip('。') for sentence in advice_sentences[:3]) + '。' if advice_sentences else advice
+                advice_blocks.append({
+                    'label': item['label'],
+                    'missing': item.get('missing', []),
+                    'target': quote,
+                    'fix': sentence,
+                    'example': example,
+                })
+        advice_lines = []
+        for block in advice_blocks[:2]:
+            heading = f"■ {block['label']}"
+            if block['missing']:
+                heading += f"（{'、'.join(block['missing'])}が足りません）"
+            lines = [heading]
+            if block['target']:
+                lines.append(f"  足す場所: 「{block['target']}」のあと")
+            lines.append(f"  直し方: {block['fix']}")
+            if block['example']:
+                lines.append(f"  例（自分の内容に置き換えてください）: {block['example']}")
+            advice_lines.append('\n'.join(lines))
+        advice = '\n\n'.join(advice_lines) if advice_lines else advice
     elif needs_improvement and USE_LLM_ADVICE:
         feedback_lines = []
         for item in advice_items:
@@ -720,6 +778,7 @@ def api_interview_advice():
         'criteria': make_public_criteria(list(by_id.values())),
         'advice': advice,
         'advice_from': advice_from,
+        'advice_items': advice_blocks,
         'timing': timing,
         'checks': checks,
     })

@@ -265,6 +265,8 @@ function renderAdviceHistory() {
   empty.classList.toggle('hidden', state.adviceHistory.length > 0);
   list.innerHTML = state.adviceHistory.slice().reverse().map((entry, index) => {
     const advice = entry.advice || {};
+    const dialogue = Array.isArray(entry.dialogue) ? entry.dialogue : [];
+    const transcript = dialogue.map(turn => `<div class="transcript-line"><span class="transcript-role">${turn.role === 'interviewer' ? '面接官の深掘り質問' : 'あなたの回答'}</span><span class="transcript-text">${escapeAdviceText(turn.text)}</span></div>`).join('');
     const statusLabels = { good: 'はい', needs_improvement: 'いいえ', not_applicable: '対象外', unavailable: '判定不可' };
     let debugSections = '';
     if (isDebugMode()) {
@@ -281,7 +283,8 @@ function renderAdviceHistory() {
     return `<article class="advice-history-card">
       <div class="advice-history-meta"><strong>${escapeAdviceText(entry.company)}</strong><span>${escapeAdviceText(entry.created_at)} ・ ${entry.followup_count ? `深掘り ${entry.followup_count}回目` : 'メイン質問'}</span></div>
       <h3>${escapeAdviceText(entry.question)}</h3>
-      <p class="advice-answer">${escapeAdviceText(advice.advice || '作成できませんでした。')}</p>
+      ${transcript ? `<div class="advice-transcript">${transcript}</div>` : ''}
+      <p class="advice-answer">${escapeAdviceText(advice.advice || '作成できませんでした。').replace(/  例（自分の内容に置き換えてください）: ([^\n<]+)/g, '<span class="advice-example">例（自分の内容に置き換えてください）: $1</span>')}</p>
       ${debugSections}
     </article>`;
   }).join('');
