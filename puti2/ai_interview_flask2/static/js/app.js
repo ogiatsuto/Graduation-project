@@ -232,6 +232,7 @@ function speechRecognitionSupported() {
 async function requestAdvice(record) {
   const controller = new AbortController();
   state.interviewController = controller;
+  const timeout = setTimeout(() => controller.abort(), 240000);
   try {
     const response = await fetch('/api/interview-advice', {
       method: 'POST',
@@ -242,22 +243,87 @@ async function requestAdvice(record) {
         dialogue: record.dialogue,
       }),
     });
-    if (!response.ok) throw new Error('advice request failed');
-    return await response.json();
+    if (!response.ok) {
+      return {
+        source: 'error',
+        error: 'AIによるアドバイスを取得できませんでした',
+      };
+    }
+    const advice = await response.json();
+    return advice.source === 'error'
+      ? { ...advice, error: 'AIによるアドバイスを取得できませんでした' }
+      : advice;
   } catch (e) {
     return {
-      source: 'fallback',
-      criteria: [],
-      advice: '作成できませんでした。',
-      advice_from: [],
-      timing: { judge_sec: 0, advice_sec: 0 },
-      checks: { rejected: [] },
+      source: 'error',
+      error: 'AIによるアドバイスを取得できませんでした',
     };
   } finally {
+    clearTimeout(timeout);
     if (state.interviewController === controller) state.interviewController = null;
   }
 }
 
+function renderAdviceBody(advice) {
+
+  const speechHtml = (advice.speech || []).length
+
+    ? `<div class="combined-advice"><h4>話し方</h4><ul>${advice.speech.map(s => `<li>${escapeAdviceText(s)}</li>`).join('')}</ul></div>`
+
+    : '';
+
+  if (advice.mode === 'material' && advice.materials) {
+
+    const m = advice.materials;
+
+    return `<div class="advice-answer">
+
+<div class="combined-advice"><h4>話す材料を探しましょう</h4>
+
+<p>${escapeAdviceText(m.intro)}</p>
+
+<ul>${(m.questions || []).map(q => `<li>${escapeAdviceText(q)}</li>`).join('')}</ul>
+
+<p>${escapeAdviceText(m.next)}</p></div>
+
+${speechHtml}
+
+</div>`;
+
+  }
+
+  const itemsHtml = (advice.items || []).map(item => `
+
+<div class="combined-advice">
+
+<h4>${escapeAdviceText(item.title)}${item.quote ? `(「${escapeAdviceText(item.quote)}」について)` : ''}</h4>
+
+<p><strong>直し方:</strong> ${escapeAdviceText(item.advice || item.fix || '')}</p>
+
+${item.example ? `<p class="advice-example"><strong>例:</strong> ${escapeAdviceText(item.example)}</p>` : ''}
+
+</div>`).join('');
+
+  return `<div class="advice-answer">
+
+${advice.notice ? `<p class="advice-notice">${escapeAdviceText(advice.notice)}</p>` : ''}
+
+${advice.good ? `<div class="combined-advice"><h4>良かった点</h4><p>${escapeAdviceText(advice.good)}</p></div>` : ''}
+
+${itemsHtml}
+
+${advice.followUp ? `<div class="combined-advice"><h4>深掘り回答への評価</h4><p>${escapeAdviceText(advice.followUp)}</p></div>` : ''}
+
+${speechHtml}
+
+${advice.footnote ? `<p class="advice-footnote"><small>${escapeAdviceText(advice.footnote)}</small></p>` : ''}
+
+</div>`;
+
+}
+
+
+ 
 function renderAdviceHistory() {
   const list = document.getElementById('adviceHistoryList');
   const empty = document.getElementById('adviceHistoryEmpty');
@@ -280,11 +346,17 @@ function renderAdviceHistory() {
       debugSections = `<div class="criteria-list"><h4>デバッグ表示</h4><p>source: ${escapeAdviceText(source)}</p>${criteria}${adviceFrom ? `<p>アドバイスの根拠: ${adviceFrom}</p>` : ''}<p>judge: ${escapeAdviceText(timing.judge_sec)}秒 / advice: ${escapeAdviceText(timing.advice_sec)}秒</p></div>`;
     }
     
+    const adviceContent = typeof entry.advice === 'string'
+      ? `<p class="advice-answer">${escapeAdviceText(entry.advice)}</p>`
+      : advice.source === 'error'
+        ? `<p class="advice-answer">${escapeAdviceText(advice.error || 'AIによるアドバイスを取得できませんでした')}</p>`
+        : renderAdviceBody(advice);
+
     return `<article class="advice-history-card">
       <div class="advice-history-meta"><strong>${escapeAdviceText(entry.company)}</strong><span>${escapeAdviceText(entry.created_at)} ・ ${entry.followup_count ? `深掘り ${entry.followup_count}回目` : 'メイン質問'}</span></div>
       <h3>${escapeAdviceText(entry.question)}</h3>
       ${transcript ? `<div class="advice-transcript">${transcript}</div>` : ''}
-      <p class="advice-answer">${escapeAdviceText(advice.advice || '作成できませんでした。').replace(/  例（自分の内容に置き換えてください）: ([^\n<]+)/g, '<span class="advice-example">例（自分の内容に置き換えてください）: $1</span>')}</p>
+      ${adviceContent}
       ${debugSections}
     </article>`;
   }).join('');
